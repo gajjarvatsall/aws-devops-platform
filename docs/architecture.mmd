@@ -1,0 +1,24 @@
+flowchart LR
+  internet((Internet)) --> alb
+  gh[GitHub Actions] -->|OIDC| deploy[IAM deploy role]
+  gh -->|push immutable image| ecr[ECR]
+  subgraph vpc[VPC 10.20.0.0/16]
+    subgraph public[Public subnets / AZ-a + AZ-b]
+      igw[Internet Gateway] --> alb[ALB HTTPS]
+      nat[NAT Gateway]
+    end
+    subgraph private_app[Private application subnets / AZ-a + AZ-b]
+      asg[EC2 Auto Scaling Group]
+    end
+    subgraph private_db[Private database subnets / AZ-a + AZ-b]
+      rds[(RDS MySQL)]
+    end
+    alb --> asg
+    asg --> rds
+    nat --> private_app
+  end
+  asg -->|read secret| secrets[Secrets Manager]
+  asg --> cw[CloudWatch Logs / Metrics]
+  alb --> logs[(S3 ALB logs)]
+  asg --> appbucket[(S3 application objects)]
+

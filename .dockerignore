@@ -1,0 +1,12 @@
+.git/
+.github/
+docs/
+environments/
+modules/
+scripts/
+bootstrap/
+app/tests/
+**/__pycache__/
+**/.pytest_cache/
+*.tfstate*
+*.tfvars

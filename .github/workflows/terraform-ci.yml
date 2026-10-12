@@ -1,0 +1,33 @@
+name: Terraform CI
+
+on:
+  pull_request:
+    paths: ["**/*.tf", "**/*.tfvars.example", "modules/**", ".github/workflows/terraform-ci.yml"]
+  push:
+    branches: [main]
+    paths: ["**/*.tf", "modules/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        directory: [bootstrap/backend, environments/dev, environments/staging, environments/prod]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.5"
+      - run: terraform fmt -check -recursive
+      - run: terraform -chdir=${{ matrix.directory }} init -backend=false -input=false
+      - run: terraform -chdir=${{ matrix.directory }} validate
+      - uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          framework: terraform
+          quiet: true
+          soft_fail: true
+

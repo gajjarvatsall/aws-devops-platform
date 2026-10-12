@@ -1,0 +1,22 @@
+variable "aws_region" { type = string }
+variable "environment" { type = string }
+variable "project_name" { type = string }
+variable "vpc_cidr" { type = string }
+variable "availability_zones" { type = list(string) }
+variable "nat_gateway_count" { type = number }
+variable "alb_account_id" { type = string }
+variable "app_port" { type = number }
+variable "image_tag" { type = string }
+variable "certificate_arn" { type = string }
+variable "instance_type" { type = string }
+variable "desired_capacity" { type = number }
+variable "min_size" { type = number }
+variable "max_size" { type = number }
+variable "database_engine_version" { type = string }
+variable "database_instance_class" { type = string }
+variable "database_multi_az" { type = bool }
+variable "database_backup_retention" { type = number }
+variable "deletion_protection" { type = bool }
+variable "force_destroy_buckets" { type = bool }
+variable "tags" { type = map(string) }
+
