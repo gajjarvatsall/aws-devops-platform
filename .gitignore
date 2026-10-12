@@ -7,8 +7,10 @@ crash.*.log
 *.tfplan
 *.plan
 terraform.tfvars
+*.tfvars
 *.auto.tfvars
 !terraform.tfvars.example
+!*.tfvars.example
 .env
 .env.*
 !.env.example
