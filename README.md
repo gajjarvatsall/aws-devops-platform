@@ -133,7 +133,8 @@ before the exact rollout artifact is applied. Both plan files are uploaded as
 short-lived workflow artifacts; they can contain sensitive infrastructure
 values and must be access-controlled.
 
-Required repository variables (not secrets) are:
+Required **repository-level Actions variables** (not Environment variables and
+not secrets) are:
 
 ```text
 AWS_REGION
@@ -144,11 +145,20 @@ TF_PROJECT_NAME
 CERTIFICATE_ARN
 ```
 
-Configure the `staging` environment with required reviewers and restrict its
-deployment branches to `main`. The environment is used only by the two apply
-jobs, so approval occurs after each corresponding plan is generated. The AWS
-OIDC trust policy permits only the `main` branch subject for plan/image jobs
-and the exact `staging` environment subject for these approved apply jobs.
+Create them under **Repository Settings → Secrets and variables → Actions →
+Variables**. They must be repository-level because the plan, image, and
+rollout-plan jobs intentionally do not use the protected Environment; adding
+`environment: staging` to those jobs would trigger approval before the plan is
+generated. If these values are created only under the `staging` Environment,
+`vars.AWS_REGION`, `vars.AWS_DEPLOY_ROLE_ARN`, and the other values are empty in
+the plan jobs and AWS authentication fails with `aws-region` missing.
+
+Configure the separate `staging` Environment with required reviewers and
+restrict its deployment branches to `main`. The environment is used only by
+the two apply jobs, so approval occurs after each corresponding plan is
+generated. The AWS OIDC trust policy permits only the `main` branch subject
+for plan/image jobs and the exact `staging` environment subject for these
+approved apply jobs.
 
 The OIDC trust policy must restrict the repository and approved branch or
 environment. The deployment role must have a separately reviewed
