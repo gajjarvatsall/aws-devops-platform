@@ -29,3 +29,7 @@ variable "github_branch" {
   type    = string
   default = "refs/heads/main"
 }
+variable "github_environment" {
+  type    = string
+  default = "staging"
+}

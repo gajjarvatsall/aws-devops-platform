@@ -1,4 +1,4 @@
 aws_region = "us-east-1"
 state_bucket_name = "replace-with-globally-unique-cloudops-tf-state"
 tags = { Project = "cloudops-demo", Environment = "bootstrap" }
-
+github_environment = "staging"

@@ -116,19 +116,24 @@ Actions workflow. It runs:
 7. Assume the staging deployment role through GitHub OIDC.
 8. Initialize staging remote state.
 9. Generate and display a reviewable base infrastructure plan.
-10. Apply the reviewed base plan with zero EC2 capacity.
+10. Wait for the protected `staging` environment approval, then apply the
+    exact uploaded base plan with zero EC2 capacity.
 11. Read the real ECR repository URL from Terraform.
-12. Build and push an immutable image tag.
-13. Generate, display, and apply the reviewed image rollout plan.
+12. Build or safely reuse an immutable image tag.
+13. Generate and display a rollout plan.
+14. Wait for the protected `staging` environment approval, then apply the exact
+    uploaded rollout plan.
 
 Pull requests and pushes to `main` run validation only; they never apply
 Terraform. A deployment must be started manually with `workflow_dispatch` and
-the `deploy` input enabled. The protected `staging` GitHub environment must
-then approve the deploy job before Terraform runs. Both Terraform plan files
-are uploaded as short-lived workflow artifacts; they can contain sensitive
-infrastructure values and must be access-controlled.
+the `deploy` input enabled. The workflow generates the base plan before the
+first protected approval, applies that exact artifact, builds or verifies the
+image, and generates the rollout plan. A second protected approval is required
+before the exact rollout artifact is applied. Both plan files are uploaded as
+short-lived workflow artifacts; they can contain sensitive infrastructure
+values and must be access-controlled.
 
-Required protected staging variables:
+Required repository variables (not secrets) are:
 
 ```text
 AWS_REGION
@@ -139,9 +144,30 @@ TF_PROJECT_NAME
 CERTIFICATE_ARN
 ```
 
+Configure the `staging` environment with required reviewers and restrict its
+deployment branches to `main`. The environment is used only by the two apply
+jobs, so approval occurs after each corresponding plan is generated. The AWS
+OIDC trust policy permits only the `main` branch subject for plan/image jobs
+and the exact `staging` environment subject for these approved apply jobs.
+
 The OIDC trust policy must restrict the repository and approved branch or
 environment. The deployment role must have a separately reviewed
 least-privilege provisioning policy. No static AWS access keys are used.
+
+The bootstrap OIDC role is optional and disabled by default. If you enable
+`create_github_oidc_role`, set these bootstrap inputs to real values:
+
+```hcl
+create_github_oidc_role  = true
+github_oidc_provider_arn = "arn:aws:iam::<account-id>:oidc-provider/token.actions.githubusercontent.com"
+github_repository        = "OWNER/REPOSITORY"
+github_branch            = "refs/heads/main"
+github_environment       = "staging"
+```
+
+The bootstrap configuration creates the trust relationship only; it does not
+create the deployment role's Terraform permissions. The OIDC provider itself
+must also exist in the AWS account.
 
 ## First deployment
 
@@ -157,9 +183,10 @@ terraform -chdir=bootstrap/backend plan -var-file=bootstrap.tfvars
 terraform -chdir=bootstrap/backend apply -var-file=bootstrap.tfvars
 ```
 
-4. Configure the protected GitHub staging variables.
+4. Configure the repository variables and protected GitHub `staging`
+   environment.
 5. Manually start `Stage deploy` with `deploy=true` after the workflow has
-   passed validation and the protected environment is configured.
+   passed validation.
 6. Provide a same-region DNS-validated ACM certificate ARN for HTTPS.
 7. Verify the resulting ALB URL and `/health`, `/ready`, and
    `/api/dashboard`.
@@ -175,13 +202,26 @@ Terraform state, generated plans, or generated tfvars.
 - EC2 and RDS are private and use security-group references.
 - RDS and S3 are encrypted; S3 requires TLS and blocks public access.
 - EC2 requires IMDSv2 and uses an encrypted EBS volume.
-- ECR tags are immutable and scan on push. `v*` release tags retain the 20
+- ECR tags are immutable and scan on push. Re-running a commit deployment
+  reuses an existing `sha-*` image only after pulling it and verifying its
+  OCI revision label matches the workflow commit. A user-supplied rollback tag
+  must already exist and have a revision label; it is never overwritten.
+  `v*` release tags retain the 20
   newest images, `sha-*` deployment images expire after 30 days, and untagged
   images expire after 7 days. Keep a release tag for any rollback image that
   must outlive the SHA retention window.
 - The runtime role is limited to the ECR repository, CloudWatch log group,
   application bucket, database secret, and read-only live dashboard APIs.
 - GitHub uses short-lived OIDC credentials instead of static keys.
+- The GitHub deployment role is external to this repository and must grant
+  only the Terraform actions and resources required by staging. It needs
+  access to the encrypted/versioned state bucket and its native lockfile,
+  plus permissions for the VPC, ALB, Auto Scaling, EC2, RDS, ECR, S3,
+  CloudWatch, IAM pass-role, and Secrets Manager resources managed here.
+- The bootstrap identity must be allowed to create and secure the state
+  bucket. The EC2 runtime role is separate and only needs ECR pull,
+  CloudWatch publish, application-bucket access, database-secret read, and
+  read-only dashboard describe permissions.
 - Terraform state is encrypted, versioned, locked, and sensitive.
 
 Do not report credentials, private keys, state, or sensitive logs in issues.
