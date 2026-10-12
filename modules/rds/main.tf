@@ -1,4 +1,4 @@
-locals { tags = merge(var.tags, { ManagedBy = "Terraform", Component = "database" }) }
+locals { tags = merge(var.tags, { ManagedBy = "Terraform", Component = "rds" }) }
 
 resource "random_password" "master" {
   length  = 32
@@ -51,4 +51,3 @@ resource "aws_secretsmanager_secret_version" "db" {
     dbname   = var.database_name
   })
 }
-

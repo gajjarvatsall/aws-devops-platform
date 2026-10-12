@@ -18,6 +18,12 @@ resource "aws_ecr_lifecycle_policy" "this" {
       },
       {
         rulePriority = 2
+        description  = "Expire old commit images"
+        selection    = { tagStatus = "tagged", tagPrefixList = ["sha-"], countType = "sinceImagePushed", countUnit = "days", countNumber = 30 }
+        action       = { type = "expire" }
+      },
+      {
+        rulePriority = 3
         description  = "Expire untagged images"
         selection    = { tagStatus = "untagged", countType = "sinceImagePushed", countUnit = "days", countNumber = 7 }
         action       = { type = "expire" }
@@ -25,4 +31,3 @@ resource "aws_ecr_lifecycle_policy" "this" {
     ]
   })
 }
-

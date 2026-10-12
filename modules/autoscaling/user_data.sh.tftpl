@@ -7,7 +7,7 @@ aws ecr get-login-password --region ${region} | docker login --username AWS --pa
 docker pull ${app_image}
 docker rm -f cloudops-demo || true
 docker run -d --name cloudops-demo --restart unless-stopped -p ${app_port}:${app_port} \
-  -e APP_ENVIRONMENT=${environment} -e AWS_REGION=${region} -e DB_SECRET_ARN=${database_secret_arn} \
+  -e APP_ENVIRONMENT=${environment} -e APP_VERSION=${image_tag} -e AWS_REGION=${region} -e DB_SECRET_ARN=${database_secret_arn} \
   -e AWS_ASG_NAME=${asg_name} -e AWS_TARGET_GROUP_ARN=${target_group_arn} \
   -e AWS_RDS_IDENTIFIER=${rds_identifier} -e AWS_ECR_REPOSITORY_NAME=${ecr_repository_name} \
   -e APP_PORT=${app_port} ${app_image}

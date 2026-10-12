@@ -28,6 +28,7 @@ resource "aws_launch_template" "app" {
     app_image           = "${var.ecr_repository_url}:${var.image_tag}"
     ecr_registry        = split("/", var.ecr_repository_url)[0]
     app_port            = var.app_port
+    image_tag           = var.image_tag
     environment         = var.environment
     region              = var.region
     database_secret_arn = var.database_secret_arn

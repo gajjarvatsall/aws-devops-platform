@@ -1,5 +1,5 @@
 data "aws_caller_identity" "current" {}
-locals { tags = merge(var.tags, { ManagedBy = "Terraform", Component = "security" }) }
+locals { tags = merge(var.tags, { ManagedBy = "Terraform", Component = "security-groups" }) }
 
 resource "aws_security_group" "alb" {
   name        = "${var.name}-alb"
@@ -87,7 +87,7 @@ resource "aws_iam_role_policy" "ec2" {
     Statement = [
       { Effect = "Allow", Action = ["ecr:GetAuthorizationToken"], Resource = "*" },
       { Effect = "Allow", Action = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], Resource = var.ecr_repository_arn },
-      { Effect = "Allow", Action = ["logs:CreateLogStream", "logs:DescribeLogStreams", "logs:PutLogEvents"], Resource = "${var.app_log_group_arn}:*" },
+      { Effect = "Allow", Action = ["logs:CreateLogStream", "logs:DescribeLogStreams", "logs:PutLogEvents"], Resource = "${trimsuffix(var.app_log_group_arn, ":*")}:*" },
       { Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject", "s3:AbortMultipartUpload"], Resource = "${var.app_bucket_arn}/*" },
     ]
   })

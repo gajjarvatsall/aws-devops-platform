@@ -115,14 +115,18 @@ Actions workflow. It runs:
 6. Format and validate Terraform roots.
 7. Assume the staging deployment role through GitHub OIDC.
 8. Initialize staging remote state.
-9. Apply the base infrastructure with zero EC2 capacity.
-10. Read the real ECR repository URL from Terraform.
-11. Build and push an immutable image tag.
-12. Apply the image rollout and desired staging capacity.
+9. Generate and display a reviewable base infrastructure plan.
+10. Apply the reviewed base plan with zero EC2 capacity.
+11. Read the real ECR repository URL from Terraform.
+12. Build and push an immutable image tag.
+13. Generate, display, and apply the reviewed image rollout plan.
 
-Pull requests run the validation job only. Pushes to `main` deploy to the
-protected `staging` GitHub environment. Manual runs can choose an image tag
-and whether deployment is enabled.
+Pull requests and pushes to `main` run validation only; they never apply
+Terraform. A deployment must be started manually with `workflow_dispatch` and
+the `deploy` input enabled. The protected `staging` GitHub environment must
+then approve the deploy job before Terraform runs. Both Terraform plan files
+are uploaded as short-lived workflow artifacts; they can contain sensitive
+infrastructure values and must be access-controlled.
 
 Required protected staging variables:
 
@@ -154,15 +158,16 @@ terraform -chdir=bootstrap/backend apply -var-file=bootstrap.tfvars
 ```
 
 4. Configure the protected GitHub staging variables.
-5. Merge to `main` or manually start `Stage deploy`.
+5. Manually start `Stage deploy` with `deploy=true` after the workflow has
+   passed validation and the protected environment is configured.
 6. Provide a same-region DNS-validated ACM certificate ARN for HTTPS.
 7. Verify the resulting ALB URL and `/health`, `/ready`, and
    `/api/dashboard`.
 
-The workflow performs the infrastructure and image sequence automatically.
-Do not use `terraform -target` as normal architecture. Review every plan in a
-production setting, and never commit backend configuration, credentials,
-Terraform state, or generated tfvars.
+The approved workflow performs the infrastructure and image sequence after the
+environment gate. Do not use `terraform -target` as normal architecture.
+Review every plan, and never commit backend configuration, credentials,
+Terraform state, generated plans, or generated tfvars.
 
 ## Security design
 
@@ -170,7 +175,10 @@ Terraform state, or generated tfvars.
 - EC2 and RDS are private and use security-group references.
 - RDS and S3 are encrypted; S3 requires TLS and blocks public access.
 - EC2 requires IMDSv2 and uses an encrypted EBS volume.
-- ECR release tags are immutable and scan on push.
+- ECR tags are immutable and scan on push. `v*` release tags retain the 20
+  newest images, `sha-*` deployment images expire after 30 days, and untagged
+  images expire after 7 days. Keep a release tag for any rollback image that
+  must outlive the SHA retention window.
 - The runtime role is limited to the ECR repository, CloudWatch log group,
   application bucket, database secret, and read-only live dashboard APIs.
 - GitHub uses short-lived OIDC credentials instead of static keys.

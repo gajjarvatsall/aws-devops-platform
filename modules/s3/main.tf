@@ -1,5 +1,5 @@
 data "aws_caller_identity" "current" {}
-locals { tags = merge(var.tags, { ManagedBy = "Terraform", Component = "storage" }) }
+locals { tags = merge(var.tags, { ManagedBy = "Terraform", Component = "s3" }) }
 
 resource "aws_s3_bucket" "app" {
   bucket        = "${var.name}-app-${data.aws_caller_identity.current.account_id}"
@@ -82,7 +82,7 @@ resource "aws_s3_bucket_policy" "alb_logs" {
         Effect    = "Allow"
         Principal = { Service = "logdelivery.elasticloadbalancing.amazonaws.com" }
         Action    = "s3:PutObject"
-        Resource  = "${aws_s3_bucket.alb_logs.arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
+        Resource  = "${aws_s3_bucket.alb_logs.arn}/alb/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
         Condition = { StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id } }
       },
       {

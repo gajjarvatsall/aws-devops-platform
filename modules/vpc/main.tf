@@ -5,7 +5,7 @@ locals {
   public_cidrs = [cidrsubnet(var.vpc_cidr, 4, 0), cidrsubnet(var.vpc_cidr, 4, 1)]
   app_cidrs    = [cidrsubnet(var.vpc_cidr, 4, 2), cidrsubnet(var.vpc_cidr, 4, 3)]
   db_cidrs     = [cidrsubnet(var.vpc_cidr, 4, 4), cidrsubnet(var.vpc_cidr, 4, 5)]
-  tags         = merge(var.tags, { ManagedBy = "Terraform", Component = "network" })
+  tags         = merge(var.tags, { ManagedBy = "Terraform", Component = "vpc" })
 }
 
 resource "aws_vpc" "this" {

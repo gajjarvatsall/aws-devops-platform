@@ -8,13 +8,13 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: Immutable image tag (defaults to the commit SHA)
+        description: Immutable image tag (defaults to sha- plus the commit SHA)
         required: false
         type: string
       deploy:
         description: Apply infrastructure and roll out the image to staging
         required: true
-        default: true
+        default: false
         type: boolean
 
 permissions:
@@ -56,7 +56,7 @@ jobs:
         run: terraform fmt -check -recursive
       - name: Validate Terraform roots
         run: |
-          for directory in bootstrap/backend environments/staging; do
+          for directory in bootstrap/backend environments/staging modules/*; do
             terraform -chdir="$directory" init -backend=false -input=false
             terraform -chdir="$directory" validate
           done
@@ -64,7 +64,7 @@ jobs:
   deploy:
     name: Deploy staging
     needs: validate
-    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' && inputs.deploy }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy }}
     environment: staging
     runs-on: ubuntu-latest
     permissions:
@@ -95,16 +95,28 @@ jobs:
       - name: Initialize Terraform
         working-directory: environments/staging
         run: terraform init -input=false -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" -backend-config="region=${{ vars.TF_STATE_REGION }}"
+      - name: Plan base infrastructure
+        working-directory: environments/staging
+        run: terraform plan -input=false -out=base.tfplan -var-file=terraform.tfvars -var="image_tag=bootstrap" -var="desired_capacity=0" -var="min_size=0"
+      - name: Show base plan
+        working-directory: environments/staging
+        run: terraform show -no-color base.tfplan
+      - name: Upload base plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-base-plan-${{ github.run_id }}
+          path: environments/staging/base.tfplan
+          retention-days: 1
       - name: Create infrastructure with zero capacity
         working-directory: environments/staging
-        run: terraform apply -input=false -auto-approve -var-file=terraform.tfvars -var="image_tag=bootstrap" -var="desired_capacity=0" -var="min_size=0"
+        run: terraform apply -input=false base.tfplan
       - name: Log in to ECR
         id: ecr
         working-directory: environments/staging
         run: echo "repository=$(terraform output -raw ecr_repository_url)" >> "$GITHUB_OUTPUT"
       - name: Build and push immutable image
         env:
-          IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
+          IMAGE_TAG: ${{ inputs.image_tag || format('sha-{0}', github.sha) }}
           ECR_REPOSITORY: ${{ steps.ecr.outputs.repository }}
         run: |
           aws ecr get-login-password --region "${{ vars.AWS_REGION }}" | docker login --username AWS --password-stdin "${ECR_REPOSITORY%%/*}"
@@ -113,5 +125,16 @@ jobs:
       - name: Roll out image
         working-directory: environments/staging
         env:
-          IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
-        run: terraform apply -input=false -auto-approve -var-file=terraform.tfvars -var="image_tag=$IMAGE_TAG"
+          IMAGE_TAG: ${{ inputs.image_tag || format('sha-{0}', github.sha) }}
+        run: |
+          terraform plan -input=false -out=rollout.tfplan -var-file=terraform.tfvars -var="image_tag=$IMAGE_TAG"
+          terraform show -no-color rollout.tfplan
+      - name: Upload rollout plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-rollout-plan-${{ github.run_id }}
+          path: environments/staging/rollout.tfplan
+          retention-days: 1
+      - name: Apply reviewed image rollout
+        working-directory: environments/staging
+        run: terraform apply -input=false rollout.tfplan
