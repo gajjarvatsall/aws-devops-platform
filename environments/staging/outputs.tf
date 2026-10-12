@@ -1,10 +1,10 @@
-output "vpc_id" { value = module.environment.vpc_id }
-output "ecr_repository_url" { value = module.environment.ecr_repository_url }
+output "vpc_id" { value = module.vpc.vpc_id }
+output "ecr_repository_url" { value = module.ecr.repository_url }
 output "database_endpoint" {
-  value     = module.environment.database_endpoint
+  value     = module.rds.endpoint
   sensitive = true
 }
-output "database_secret_arn" { value = module.environment.database_secret_arn }
-output "alb_dns_name" { value = module.environment.alb_dns_name }
-output "target_group_arn" { value = module.environment.target_group_arn }
-output "application_log_group" { value = module.environment.application_log_group }
+output "database_secret_arn" { value = module.rds.secret_arn }
+output "alb_dns_name" { value = module.alb.load_balancer_dns_name }
+output "target_group_arn" { value = module.alb.target_group_arn }
+output "application_log_group" { value = module.cloudwatch.app_log_group_name }

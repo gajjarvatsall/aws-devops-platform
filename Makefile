@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-TERRAFORM_DIRS := environments/dev environments/staging environments/prod bootstrap/backend
+TERRAFORM_DIRS := environments/staging bootstrap/backend
 
 .PHONY: test lint docker-build terraform-fmt terraform-validate security-scan check
 test:
@@ -19,4 +19,3 @@ terraform-validate:
 security-scan:
 	checkov -d . --framework terraform --quiet
 check: test lint terraform-fmt terraform-validate
-

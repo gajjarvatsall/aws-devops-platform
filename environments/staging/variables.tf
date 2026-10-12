@@ -22,10 +22,6 @@ variable "nat_gateway_count" {
   type    = number
   default = 2
 }
-variable "alb_account_id" {
-  type    = string
-  default = "127311923021"
-}
 variable "app_port" {
   type    = number
   default = 8080

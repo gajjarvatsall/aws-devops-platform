@@ -1,0 +1,117 @@
+name: Stage deploy
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Immutable image tag (defaults to the commit SHA)
+        required: false
+        type: string
+      deploy:
+        description: Apply infrastructure and roll out the image to staging
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stage-deploy
+  cancel-in-progress: false
+
+env:
+  TERRAFORM_VERSION: "1.15.8"
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  validate:
+    name: Test and validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: app/requirements.txt
+      - name: Install application dependencies
+        run: python -m pip install -r app/requirements.txt
+      - name: Run application tests
+        run: python -m pytest app/tests
+      - name: Run application lint
+        run: python -m ruff check app
+      - name: Audit Python dependencies
+        run: python -m pip_audit -r app/requirements.txt
+      - name: Build application image
+        run: docker build --tag cloudops-demo:${{ github.sha }} ./app
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - name: Format Terraform
+        run: terraform fmt -check -recursive
+      - name: Validate Terraform roots
+        run: |
+          for directory in bootstrap/backend environments/staging; do
+            terraform -chdir="$directory" init -backend=false -input=false
+            terraform -chdir="$directory" validate
+          done
+
+  deploy:
+    name: Deploy staging
+    needs: validate
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' && inputs.deploy }}
+    environment: staging
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: github-${{ github.run_id }}
+      - name: Create staging variables
+        working-directory: environments/staging
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          PROJECT_NAME: ${{ vars.TF_PROJECT_NAME }}
+          CERTIFICATE_ARN: ${{ vars.CERTIFICATE_ARN }}
+        run: |
+          cat > terraform.tfvars <<EOF
+          aws_region = "$AWS_REGION"
+          project_name = "$PROJECT_NAME"
+          certificate_arn = "$CERTIFICATE_ARN"
+          EOF
+      - name: Initialize Terraform
+        working-directory: environments/staging
+        run: terraform init -input=false -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" -backend-config="region=${{ vars.TF_STATE_REGION }}"
+      - name: Create infrastructure with zero capacity
+        working-directory: environments/staging
+        run: terraform apply -input=false -auto-approve -var-file=terraform.tfvars -var="image_tag=bootstrap" -var="desired_capacity=0" -var="min_size=0"
+      - name: Log in to ECR
+        id: ecr
+        working-directory: environments/staging
+        run: echo "repository=$(terraform output -raw ecr_repository_url)" >> "$GITHUB_OUTPUT"
+      - name: Build and push immutable image
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
+          ECR_REPOSITORY: ${{ steps.ecr.outputs.repository }}
+        run: |
+          aws ecr get-login-password --region "${{ vars.AWS_REGION }}" | docker login --username AWS --password-stdin "${ECR_REPOSITORY%%/*}"
+          docker build --tag "$ECR_REPOSITORY:$IMAGE_TAG" ./app
+          docker push "$ECR_REPOSITORY:$IMAGE_TAG"
+      - name: Roll out image
+        working-directory: environments/staging
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
+        run: terraform apply -input=false -auto-approve -var-file=terraform.tfvars -var="image_tag=$IMAGE_TAG"
