@@ -2,6 +2,10 @@ variable "aws_region" {
   type    = string
   default = "us-east-1"
 }
+variable "terraform_state_bucket" {
+  type    = string
+  default = "aws-vg-cloudops-tf-state"
+}
 variable "environment" {
   type    = string
   default = "staging"
@@ -26,21 +30,17 @@ variable "app_port" {
   type    = number
   default = 8080
 }
-variable "image_tag" {
-  type    = string
-  default = "bootstrap"
-}
 variable "instance_type" {
   type    = string
   default = "t4g.small"
 }
 variable "desired_capacity" {
   type    = number
-  default = 1
+  default = 0
 }
 variable "min_size" {
   type    = number
-  default = 1
+  default = 0
 }
 variable "max_size" {
   type    = number

@@ -1,8 +1,18 @@
 data "aws_caller_identity" "current" {}
 
 locals {
-  name = "${var.project_name}-${var.environment}"
-  tags = merge(var.tags, { Project = var.project_name, Environment = var.environment, Owner = "platform-team" })
+  name                 = "${var.project_name}-${var.environment}"
+  image_parameter_name = "/${local.name}/image-tag"
+  tags                 = merge(var.tags, { Project = var.project_name, Environment = var.environment, Owner = "platform-team" })
+}
+
+resource "aws_ssm_parameter" "image_tag" {
+  name        = local.image_parameter_name
+  description = "Immutable ECR image tag deployed to ${local.name}"
+  type        = "String"
+  value       = "bootstrap"
+  lifecycle { ignore_changes = [value] }
+  tags = local.tags
 }
 
 module "vpc" {
@@ -34,14 +44,15 @@ module "cloudwatch" {
 }
 
 module "security_groups" {
-  source             = "../../modules/security-groups"
-  name               = local.name
-  vpc_id             = module.vpc.vpc_id
-  app_port           = var.app_port
-  ecr_repository_arn = module.ecr.repository_arn
-  app_log_group_arn  = module.cloudwatch.app_log_group_arn
-  app_bucket_arn     = module.s3.app_bucket_arn
-  tags               = local.tags
+  source              = "../../modules/security-groups"
+  name                = local.name
+  vpc_id              = module.vpc.vpc_id
+  app_port            = var.app_port
+  ecr_repository_arn  = module.ecr.repository_arn
+  image_parameter_arn = aws_ssm_parameter.image_tag.arn
+  app_log_group_arn   = module.cloudwatch.app_log_group_arn
+  app_bucket_arn      = module.s3.app_bucket_arn
+  tags                = local.tags
 }
 
 module "rds" {
@@ -89,7 +100,6 @@ module "autoscaling" {
   instance_profile_name = module.security_groups.ec2_instance_profile_name
   target_group_arn      = module.alb.target_group_arn
   ecr_repository_url    = module.ecr.repository_url
-  image_tag             = var.image_tag
   app_port              = var.app_port
   instance_type         = var.instance_type
   desired_capacity      = var.desired_capacity
@@ -98,11 +108,79 @@ module "autoscaling" {
   database_secret_arn   = module.rds.secret_arn
   rds_identifier        = "${local.name}-mysql"
   ecr_repository_name   = module.ecr.repository_name
+  image_parameter_name  = aws_ssm_parameter.image_tag.name
   region                = var.aws_region
   environment           = var.environment
   log_group_name        = module.cloudwatch.app_log_group_name
   tags                  = local.tags
   depends_on            = [module.rds, aws_iam_role_policy.secret_read]
+}
+
+resource "aws_iam_role" "github_app_deploy" {
+  name = "cloudops-github-app-deploy"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Federated = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/token.actions.githubusercontent.com" }
+      Action    = "sts:AssumeRoleWithWebIdentity"
+      Condition = { StringEquals = {
+        "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+        "token.actions.githubusercontent.com:sub" = "repo:gajjarvatsall@82715470/aws-devops-platform@1415557208:environment:staging-app"
+      } }
+    }]
+  })
+  tags = local.tags
+}
+
+resource "aws_iam_role_policy" "github_app_deploy" {
+  name = "cloudops-github-app-deploy"
+  role = aws_iam_role.github_app_deploy.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Effect = "Allow", Action = ["ecr:GetAuthorizationToken"], Resource = "*" },
+      { Effect = "Allow", Action = ["ecr:BatchCheckLayerAvailability", "ecr:CompleteLayerUpload", "ecr:InitiateLayerUpload", "ecr:PutImage", "ecr:UploadLayerPart", "ecr:DescribeImages"], Resource = module.ecr.repository_arn },
+      { Effect = "Allow", Action = ["ssm:PutParameter"], Resource = aws_ssm_parameter.image_tag.arn },
+      { Effect = "Allow", Action = ["autoscaling:UpdateAutoScalingGroup", "autoscaling:StartInstanceRefresh"], Resource = "arn:aws:autoscaling:${var.aws_region}:${data.aws_caller_identity.current.account_id}:autoScalingGroup:*:autoScalingGroupName:${local.name}-app-asg" },
+      { Effect = "Allow", Action = ["autoscaling:DescribeAutoScalingGroups", "autoscaling:DescribeInstanceRefreshes", "elasticloadbalancing:DescribeTargetHealth", "elasticloadbalancing:DescribeLoadBalancers"], Resource = "*" }
+    ]
+  })
+}
+
+resource "aws_iam_role" "github_terraform_plan" {
+  name = "cloudops-github-terraform-plan"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Federated = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/token.actions.githubusercontent.com" }
+      Action    = "sts:AssumeRoleWithWebIdentity"
+      Condition = { StringEquals = {
+        "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+        "token.actions.githubusercontent.com:sub" = "repo:gajjarvatsall@82715470/aws-devops-platform@1415557208:pull_request"
+      } }
+    }]
+  })
+  tags = local.tags
+}
+
+resource "aws_iam_role_policy" "github_terraform_plan_state" {
+  name = "cloudops-github-terraform-plan-readonly"
+  role = aws_iam_role.github_terraform_plan.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Effect = "Allow", Action = ["sts:GetCallerIdentity"], Resource = "*" },
+      { Effect = "Allow", Action = ["ec2:Describe*", "autoscaling:Describe*", "elasticloadbalancing:Describe*", "rds:Describe*", "rds:ListTagsForResource", "ecr:Describe*", "ecr:GetLifecyclePolicy", "logs:Describe*", "logs:ListTagsForResource", "iam:Get*", "iam:List*", "secretsmanager:DescribeSecret", "secretsmanager:ListSecretVersionIds"], Resource = "*" },
+      { Effect = "Allow", Action = ["ssm:GetParameter"], Resource = "arn:aws:ssm:${var.aws_region}:*:parameter/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64" },
+      { Effect = "Allow", Action = ["s3:GetBucketLocation"], Resource = "arn:aws:s3:::${var.terraform_state_bucket}" },
+      { Effect = "Allow", Action = ["s3:ListBucket"], Resource = "arn:aws:s3:::${var.terraform_state_bucket}", Condition = { StringLike = { "s3:prefix" = ["staging/*"] } } },
+      { Effect = "Allow", Action = ["s3:GetBucketAcl", "s3:GetBucketLocation", "s3:GetBucketPolicy", "s3:GetBucketPolicyStatus", "s3:GetBucketPublicAccessBlock", "s3:GetBucketTagging", "s3:GetBucketVersioning", "s3:GetEncryptionConfiguration", "s3:GetLifecycleConfiguration", "s3:GetBucketLogging", "s3:ListBucket"], Resource = "arn:aws:s3:::${local.name}*" },
+      { Effect = "Allow", Action = ["s3:GetObject"], Resource = "arn:aws:s3:::${local.name}*/*" },
+      { Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"], Resource = ["arn:aws:s3:::${var.terraform_state_bucket}/staging/terraform.tfstate", "arn:aws:s3:::${var.terraform_state_bucket}/staging/terraform.tfstate.tflock"] }
+    ]
+  })
 }
 
 resource "aws_iam_role_policy" "dashboard_read" {

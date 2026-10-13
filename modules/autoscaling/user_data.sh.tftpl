@@ -4,13 +4,14 @@ exec > >(tee /var/log/cloud-init-output.log | logger -t user-data -s 2>/dev/cons
 dnf install -y docker amazon-cloudwatch-agent
 systemctl enable --now docker
 aws ecr get-login-password --region ${region} | docker login --username AWS --password-stdin ${ecr_registry}
-docker pull ${app_image}
+IMAGE_TAG="$(aws ssm get-parameter --name ${image_parameter_name} --query 'Parameter.Value' --output text --region ${region})"
+docker pull ${ecr_repository_url}:$IMAGE_TAG
 docker rm -f cloudops-demo || true
 docker run -d --name cloudops-demo --restart unless-stopped -p ${app_port}:${app_port} \
-  -e APP_ENVIRONMENT=${environment} -e APP_VERSION=${image_tag} -e AWS_REGION=${region} -e DB_SECRET_ARN=${database_secret_arn} \
+  -e APP_ENVIRONMENT=${environment} -e APP_VERSION=$IMAGE_TAG -e AWS_REGION=${region} -e DB_SECRET_ARN=${database_secret_arn} \
   -e AWS_ASG_NAME=${asg_name} -e AWS_TARGET_GROUP_ARN=${target_group_arn} \
   -e AWS_RDS_IDENTIFIER=${rds_identifier} -e AWS_ECR_REPOSITORY_NAME=${ecr_repository_name} \
-  -e APP_PORT=${app_port} ${app_image}
+  -e APP_PORT=${app_port} ${ecr_repository_url}:$IMAGE_TAG
 cat >/opt/aws/amazon-cloudwatch-agent.json <<'JSON'
 {"logs":{"logs_collected":{"files":{"collect_list":[{"file_path":"/var/log/cloud-init-output.log","log_group_name":"${log_group}","log_stream_name":"{instance_id}/bootstrap","timezone":"UTC"}]}}}}
 JSON

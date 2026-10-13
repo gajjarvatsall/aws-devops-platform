@@ -11,7 +11,7 @@ app/                         Flask service, Dockerfile, and tests
 modules/                     Reusable Terraform AWS modules
 environments/staging/        Only deployable Terraform environment
 bootstrap/backend/           Terraform state-bucket bootstrap
-.github/workflows/           Single CI/CD workflow: stage-deploy.yaml
+.github/workflows/           CI, Terraform plan/apply, and app release
 scripts/                     Local validation helpers
 Makefile                     Local command shortcuts
 ```
@@ -104,179 +104,58 @@ password, so restrict state-bucket access and artifact access.
 
 ## CI/CD workflow and required AWS setup
 
-[`stage-deploy.yaml`](.github/workflows/stage-deploy.yaml) is the only
-application deployment workflow. Pull requests and pushes to `main` run tests,
-lint, dependency audit, a credential-pattern check, Docker build, Terraform
-formatting, and Terraform validation without AWS credentials. Deployment is
-started explicitly with `workflow_dispatch` from `main`; the `staging`
-environment approval happens before AWS credentials are issued.
+The pipeline has three separate paths:
 
-Normal deployments build or verify an immutable `sha-<commit>` ECR image, make
-a Terraform plan, reject delete/replace changes by default, apply that exact
-plan, wait for healthy ALB targets, and check `/health`. The plan binary stays
-on the ephemeral runner; planned values are not printed or uploaded. The
-deployment job does not temporarily scale a running service to zero.
+- [ci.yaml](.github/workflows/ci.yaml) runs tests, lint, dependency and credential checks, Docker build, Terraform format, and configuration validation on PRs and pushes. It has no AWS credentials.
+- [terraform-plan.yaml](.github/workflows/terraform-plan.yaml) runs a read-only speculative Terraform plan for infrastructure PRs. It summarizes resource actions, never uploads plan files, and never applies.
+- [terraform-apply.yaml](.github/workflows/terraform-apply.yaml) is started manually from `main` after infrastructure changes merge. It waits for the protected `staging` environment, plans again against current state, rejects deletes/replacements, and applies that exact saved plan.
+- [app-release.yaml](.github/workflows/app-release.yaml) runs when app changes merge to `main` (or can be dispatched for rollback). It builds an immutable `sha-<commit>` ECR image, updates one SSM image-tag parameter, activates or refreshes the EC2 Auto Scaling Group, and checks ALB health. It never runs Terraform.
 
-For the first deployment only, use manual dispatch with `deploy=true` and
-`bootstrap=true`. It creates the infrastructure with zero EC2 capacity, pushes
-the application image, then applies the initial rollout. Do not use bootstrap
-mode after the environment is running. For rollback, manually dispatch with
-`deploy=true`, leave `bootstrap=false`, and provide an existing immutable ECR
-`image_tag`. Destructive Terraform plans fail unless the manual run explicitly
-sets `allow_destroy=true`.
-
-The workflow targets these repository-specific values. Verify them against the
-AWS account before deployment:
+Terraform creates the infrastructure with the ASG at zero capacity. The first app release publishes its image and activates the ASG. EC2 reads the current immutable image tag from Parameter Store at boot, so app releases do not change infrastructure. Terraform ignores runtime ASG min/desired capacity and the SSM parameter value; after creation, the application release flow owns those values.
 
 | Setting | Value |
 |---|---|
 | AWS account | `337909740274` |
 | Region | `ap-south-1` |
-| Deployment role | `cloudops-github-terraform-deploy` |
-| Terraform state bucket | `aws-vg-cloudops-tf-state` |
-| Terraform state key | `staging/terraform.tfstate` |
+| Terraform apply role | `cloudops-github-terraform-deploy` |
+| Terraform PR plan role | `cloudops-github-terraform-plan` |
+| App release role | `cloudops-github-app-deploy` |
+| Terraform state bucket/key | `aws-vg-cloudops-tf-state` / `staging/terraform.tfstate` |
 | Terraform project/environment | `cloudops-demo-staging` |
 | Application URL | HTTP using the ALB generated hostname |
 
-No AWS access keys or database credentials belong in GitHub variables or
-secrets. Non-secret deployment configuration is stored in the workflow.
+### AWS roles and GitHub OIDC
 
-### 1. Verify the AWS GitHub OIDC provider
-
-In AWS Console, open **IAM → Identity providers** and confirm this provider:
+Confirm the IAM OIDC provider exists in account `337909740274`:
 
 - URL: `https://token.actions.githubusercontent.com`
 - Audience: `sts.amazonaws.com`
 - ARN: `arn:aws:iam::337909740274:oidc-provider/token.actions.githubusercontent.com`
 
-If absent, create an OpenID Connect provider with that URL and audience in
-account `337909740274`. The provider and deployment role must be in the same
-account.
+The existing `cloudops-github-terraform-deploy` role must trust only the `staging` GitHub environment subject, with `aud` equal to `sts.amazonaws.com`:
 
-### 2. Set the deployment role trust policy
-
-GitHub created this repository on October 12, 2026. Its OIDC subject includes
-immutable owner and repository IDs: owner `82715470`, repository `1415557208`.
-In **IAM → Roles → `cloudops-github-terraform-deploy` → Trust relationships →
-Edit trust policy**, use this exact trust document:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "GitHubActionsOidcTrust",
-      "Effect": "Allow",
-      "Principal": {
-        "Federated": "arn:aws:iam::337909740274:oidc-provider/token.actions.githubusercontent.com"
-      },
-      "Action": "sts:AssumeRoleWithWebIdentity",
-      "Condition": {
-        "StringEquals": {
-          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-          "token.actions.githubusercontent.com:sub": "repo:gajjarvatsall@82715470/aws-devops-platform@1415557208:environment:staging"
-        }
-      }
-    }
-  ]
-}
+```text
+repo:gajjarvatsall@82715470/aws-devops-platform@1415557208:environment:staging
 ```
 
-The deploy job declares environment `staging`, so AWS must trust the exact
-environment subject above. Name the environment exactly `staging`, restrict
-deployments to `main`, and require a reviewer. The deployment job always uses
-this protected environment.
+Its existing permission policy must allow Terraform to manage this staging environment, create/update the two dedicated GitHub roles and inline policies (`iam:CreateRole`, `iam:PutRolePolicy`, `iam:UpdateAssumeRolePolicy`, and role tagging), and access the S3 state object and lockfile. Scope `iam:PassRole` to the EC2 runtime role and require `iam:PassedToService=ec2.amazonaws.com`. Do not attach `AdministratorAccess`.
 
-### 3. Attach deployment permissions separately
+The first successful Terraform apply creates two dedicated roles:
 
-The trust document permits role assumption; it does not grant AWS service
-permissions. Inspect the role's **Permissions** tab and attach a separate,
-reviewed least-privilege identity policy. It must cover the S3 state object and
-lockfile, plus staging resources managed here: VPC, EC2 and launch templates,
-Auto Scaling, ELB, RDS, ECR, S3, CloudWatch Logs, Secrets Manager, and the EC2
-runtime IAM role/profile/policies. Scope `iam:PassRole` to that runtime role
-and require `iam:PassedToService` to equal `ec2.amazonaws.com`. Do not attach
-`AdministratorAccess` or put permissions in the trust document.
+- `cloudops-github-terraform-plan`, trusted for `repo:gajjarvatsall@82715470/aws-devops-platform@1415557208:pull_request`. It has resource read permissions and only the S3 write access Terraform needs to manage its lockfile. It cannot apply AWS changes or call Secrets Manager to retrieve values. It can read Terraform state, which contains sensitive data, so only trusted repository collaborators should be allowed to open same-repository PRs or change workflow files.
+- `cloudops-github-app-deploy`, trusted for `repo:gajjarvatsall@82715470/aws-devops-platform@1415557208:environment:staging-app`. It can publish to the staging ECR repository, update the staging image parameter, change capacity, and refresh the staging ASG.
 
-This repository does not contain the account's attached deployment policy,
-and the latest failure occurs before AWS evaluates that policy. An AWS
-administrator should inspect the existing role permissions before deployment.
-For an auditable policy starting point, create a Terraform plan using approved
-short-lived AWS admin/SSO access, render it to JSON in a private local folder,
-and use IAM Policy Autopilot. Plans may contain secrets; do not print, upload,
-or commit them:
+In **Repository Settings → Environments**, configure `staging` to restrict deployment to `main` and require an infrastructure reviewer. Create `staging-app` and restrict it to `main`; app deployments run automatically unless you add a reviewer gate. No AWS access keys or database credentials are needed as GitHub secrets.
 
-```bash
-umask 077
-terraform -chdir=environments/staging init \
-  -backend-config="bucket=aws-vg-cloudops-tf-state" \
-  -backend-config="region=ap-south-1"
-terraform -chdir=environments/staging plan -out=/private/tmp/staging-plan.tfplan
-terraform -chdir=environments/staging show -json \
-  /private/tmp/staging-plan.tfplan > /private/tmp/staging-plan.json
-uvx iam-policy-autopilot@latest generate-policies \
-  /private/tmp/staging-plan.json --region ap-south-1 --account 337909740274 --pretty
-rm -f /private/tmp/staging-plan.tfplan /private/tmp/staging-plan.json
-```
+### Remote Terraform state
 
-Review and scope the generated policy before attachment. It does not replace
-the explicit state-bucket permissions or prove least privilege by itself.
+The S3 bucket `aws-vg-cloudops-tf-state` in `ap-south-1` must exist before workflows can use it. The backend uses encryption and native S3 lockfiles. If it does not exist, create it once using the separately documented bootstrap in `bootstrap/backend`; review its plan and use an authorized AWS operator identity. Do not create a duplicate bucket or delete a lock while a run may be active. State contains sensitive database data, so keep access restricted and never upload a Terraform plan or state as an Actions artifact.
 
-The EC2 runtime role is a different identity. To produce a candidate runtime
-policy from the app's actual boto3 calls and the staging Terraform directory,
-run this separately and review the output before changing the policy in
-`modules/security-groups/main.tf`:
+### First deployment and routine changes
 
-```bash
-uvx iam-policy-autopilot@latest generate-policies \
-  /Users/vatsalgajjar/Documents/aws-devops-platform/app/app.py \
-  --region ap-south-1 --account 337909740274 \
-  --service-hints secretsmanager autoscaling elasticloadbalancing rds ecr \
-  --tf-dir /Users/vatsalgajjar/Documents/aws-devops-platform/environments/staging \
-  --pretty
-```
+For initial setup, merge the infrastructure PR, then manually run **Actions → Terraform apply → Run workflow** from `main` and approve the protected `staging` environment. It creates the ECR repository, SSM image parameter, ASG at zero capacity, and the dedicated plan/app roles. The plan role becomes available after this first apply, so the initial infrastructure PR needs a human-reviewed bootstrap exception if branch protection requires every check to pass. After bootstrap, infrastructure PRs receive the AWS-backed speculative plan. To start the app the first time, manually run **Actions → Application release → Run workflow** from `main` with `image_tag` blank. Later pushes changing `app/**` build and deploy automatically. To roll back, use that same manual workflow with an existing immutable ECR tag such as `sha-<commit>`.
 
-### 4. Configure GitHub deployment protection
-
-In **Repository Settings → Environments**, create `staging`, add required
-reviewers, and restrict deployment branches to `main`. AWS access keys and
-database credentials are not needed as environment secrets.
-
-### 5. Prepare remote Terraform state
-
-The workflow requires the S3 bucket `aws-vg-cloudops-tf-state` in
-`ap-south-1`. The backend uses encryption, versioning, and S3 native lockfiles.
-Confirm public access is blocked and the deployment role can read/write
-`staging/terraform.tfstate` and its `.tflock` object. If the bucket does not
-exist, copy the example, review the bucket name and region, then create it with
-the one-time AWS SSO/operator identity:
-
-```bash
-cp bootstrap/backend/bootstrap.tfvars.example bootstrap/backend/bootstrap.tfvars
-terraform -chdir=bootstrap/backend init
-terraform -chdir=bootstrap/backend plan -var-file=bootstrap.tfvars
-terraform -chdir=bootstrap/backend apply -var-file=bootstrap.tfvars
-```
-
-Only apply if the plan creates the intended bucket and security settings. If
-the bucket already exists but is not in bootstrap Terraform state, import its
-resources before applying; do not attempt to create a duplicate or replace it.
-Keep bootstrap state private and backed up. Never delete a lock while a run may
-be active.
-
-### 6. Start deployment
-
-For a new empty staging state, open **Actions → Stage deploy → Run workflow**,
-select `main`, set `deploy=true` and `bootstrap=true`, leave `image_tag` blank,
-and keep `allow_destroy=false`. Approve the `staging` environment when GitHub
-requests it. Later pushes to `main` run validation only. Start each deployment
-manually from `main` with `deploy=true`; the protected environment approval is
-still required. For a rollback, manually dispatch with `deploy=true`,
-`bootstrap=false`, and an existing immutable `image_tag`. Only set
-`allow_destroy=true` for an intentional, reviewed destructive change.
-
-The ALB serves HTTP because this setup has no domain name or ACM certificate.
-Use `/health` to check the app; `/ready` also requires a working database path.
+The ALB serves HTTP because this setup has no domain name or ACM certificate. Use `/health` for the application liveness check; `/ready` also requires the database path to work.
 
 ## Security design
 
@@ -294,11 +173,10 @@ Use `/health` to check the app; `/ready` also requires a working database path.
 - The runtime role is limited to the ECR repository, CloudWatch log group,
   application bucket, database secret, and read-only live dashboard APIs.
 - GitHub uses short-lived OIDC credentials instead of static keys.
-- The GitHub deployment role is external to this repository and must grant
-  only the Terraform actions and resources required by staging. It needs
-  access to the encrypted/versioned state bucket and its native lockfile,
-  plus permissions for the VPC, ALB, Auto Scaling, EC2, RDS, ECR, S3,
-  CloudWatch, IAM pass-role, and Secrets Manager resources managed here.
+- The Terraform apply role is an existing AWS identity; inspect and scope its
+  state access, infrastructure permissions, and EC2-only `iam:PassRole` access.
+  Terraform creates separate plan and application release roles with narrower
+  policies.
 - The bootstrap identity must be allowed to create and secure the state
   bucket. The EC2 runtime role is separate and only needs ECR pull,
   CloudWatch publish, application-bucket access, database-secret read, and
@@ -309,7 +187,9 @@ The project uses separate identities for distinct jobs:
 
 | Role | Trust principal | Purpose | Managed by |
 |---|---|---|---|
-| `cloudops-github-terraform-deploy` | GitHub OIDC provider, restricted to this repository's `staging` environment | Terraform provisioning, remote state, ECR publish, health checks | AWS account administrator / optional bootstrap root |
+| `cloudops-github-terraform-deploy` | GitHub OIDC provider, restricted to this repository's `staging` environment | Manually approved Terraform provisioning | AWS account administrator / optional bootstrap root |
+| `cloudops-github-terraform-plan` | GitHub OIDC provider, restricted to this repository's `pull_request` subject | Read-only infrastructure plan and state locking | Staging Terraform after first apply |
+| `cloudops-github-app-deploy` | GitHub OIDC provider, restricted to this repository's `staging-app` environment | ECR push, image pointer update, and ASG refresh | Staging Terraform after first apply |
 | `cloudops-demo-staging-ec2-runtime` | `ec2.amazonaws.com` | App image pull, logs, app bucket, DB secret, read-only dashboard status | Staging Terraform |
 | Auto Scaling service-linked role | AWS service-linked role | EC2 Auto Scaling operations | AWS creates/manages it when Auto Scaling is first used |
 
@@ -336,7 +216,7 @@ the secret ARN, IAM policy, security-group reference, routes, and RDS status
 without printing the secret. For state-lock failures, identify the active run;
 never delete a lock blindly.
 
-Rollback uses the previous immutable ECR tag through the same reviewed staging
+Rollback uses the previous immutable ECR tag through the application release
 workflow. Do not reuse or mutate release tags. Preserve RDS backups and state
 versions. Teardown is an explicit operator action and must protect data before
 removing infrastructure.

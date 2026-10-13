@@ -25,18 +25,18 @@ resource "aws_launch_template" "app" {
     }
   }
   user_data = base64encode(templatefile("${path.module}/user_data.sh.tftpl", {
-    app_image           = "${var.ecr_repository_url}:${var.image_tag}"
-    ecr_registry        = split("/", var.ecr_repository_url)[0]
-    app_port            = var.app_port
-    image_tag           = var.image_tag
-    environment         = var.environment
-    region              = var.region
-    database_secret_arn = var.database_secret_arn
-    asg_name            = "${var.name}-app-asg"
-    target_group_arn    = var.target_group_arn
-    rds_identifier      = var.rds_identifier
-    ecr_repository_name = var.ecr_repository_name
-    log_group           = var.log_group_name
+    ecr_repository_url   = var.ecr_repository_url
+    ecr_registry         = split("/", var.ecr_repository_url)[0]
+    app_port             = var.app_port
+    image_parameter_name = var.image_parameter_name
+    environment          = var.environment
+    region               = var.region
+    database_secret_arn  = var.database_secret_arn
+    asg_name             = "${var.name}-app-asg"
+    target_group_arn     = var.target_group_arn
+    rds_identifier       = var.rds_identifier
+    ecr_repository_name  = var.ecr_repository_name
+    log_group            = var.log_group_name
   }))
   tag_specifications {
     resource_type = "instance"
@@ -45,10 +45,11 @@ resource "aws_launch_template" "app" {
 }
 
 resource "aws_autoscaling_group" "app" {
-  name                      = "${var.name}-app-asg"
-  min_size                  = var.min_size
-  max_size                  = var.max_size
-  desired_capacity          = var.desired_capacity
+  name             = "${var.name}-app-asg"
+  min_size         = var.min_size
+  max_size         = var.max_size
+  desired_capacity = var.desired_capacity
+  lifecycle { ignore_changes = [desired_capacity, min_size] }
   vpc_zone_identifier       = var.subnet_ids
   health_check_type         = "ELB"
   health_check_grace_period = 180
@@ -60,8 +61,9 @@ resource "aws_autoscaling_group" "app" {
   instance_refresh {
     strategy = "Rolling"
     preferences {
-      min_healthy_percentage = 50
-      skip_matching          = true
+      min_healthy_percentage = 100
+      max_healthy_percentage = 200
+      skip_matching          = false
     }
   }
   tag {

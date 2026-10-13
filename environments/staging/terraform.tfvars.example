@@ -1,5 +1,5 @@
 aws_region = "ap-south-1"
 project_name = "cloudops-demo"
-desired_capacity = 1
-min_size = 1
+desired_capacity = 0
+min_size = 0
 max_size = 4

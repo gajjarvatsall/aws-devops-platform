@@ -9,6 +9,7 @@ variable "allowed_http" {
   default = true
 }
 variable "ecr_repository_arn" { type = string }
+variable "image_parameter_arn" { type = string }
 variable "app_log_group_arn" { type = string }
 variable "app_bucket_arn" { type = string }
 variable "tags" {

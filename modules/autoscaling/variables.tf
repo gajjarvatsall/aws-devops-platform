@@ -4,10 +4,7 @@ variable "security_group_id" { type = string }
 variable "instance_profile_name" { type = string }
 variable "target_group_arn" { type = string }
 variable "ecr_repository_url" { type = string }
-variable "image_tag" {
-  type    = string
-  default = "bootstrap"
-}
+variable "image_parameter_name" { type = string }
 variable "app_port" {
   type    = number
   default = 8080
