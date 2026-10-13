@@ -115,23 +115,20 @@ Actions workflow. It runs:
 6. Format and validate Terraform roots.
 7. Assume the staging deployment role through GitHub OIDC.
 8. Initialize staging remote state.
-9. Generate and display a reviewable base infrastructure plan.
-10. Wait for the protected `staging` environment approval, then apply the
-    exact uploaded base plan with zero EC2 capacity.
+9. Generate and display a base infrastructure plan.
+10. Wait for one protected `staging` environment approval, then apply the exact
+    uploaded base plan with zero EC2 capacity.
 11. Read the real ECR repository URL from Terraform.
 12. Build or safely reuse an immutable image tag.
-13. Generate and display a rollout plan.
-14. Wait for the protected `staging` environment approval, then apply the exact
-    uploaded rollout plan.
+13. Generate and apply the rollout plan in the same approved deployment job.
 
-Pull requests and pushes to `main` run validation only; they never apply
-Terraform. A deployment must be started manually with `workflow_dispatch` and
-the `deploy` input enabled. The workflow generates the base plan before the
-first protected approval, applies that exact artifact, builds or verifies the
-image, and generates the rollout plan. A second protected approval is required
-before the exact rollout artifact is applied. Both plan files are uploaded as
-short-lived workflow artifacts; they can contain sensitive infrastructure
-values and must be access-controlled.
+Pull requests run validation only. A push to `main` runs validation, generates
+the base plan, and pauses once at the protected `staging` environment. After
+one approval, the workflow applies the base plan, builds or verifies the image,
+generates the rollout plan, and applies it. Manual runs are also supported by
+starting `workflow_dispatch` with `deploy=true`. The base plan is uploaded as
+a short-lived artifact and the rollout plan is displayed in the approved job;
+both can contain sensitive infrastructure values and must be access-controlled.
 
 Required **repository-level Actions variables** (not Environment variables and
 not secrets) are:
@@ -155,10 +152,10 @@ the plan jobs and AWS authentication fails with `aws-region` missing.
 
 Configure the separate `staging` Environment with required reviewers and
 restrict its deployment branches to `main`. The environment is used only by
-the two apply jobs, so approval occurs after each corresponding plan is
-generated. The AWS OIDC trust policy permits only the `main` branch subject
-for plan/image jobs and the exact `staging` environment subject for these
-approved apply jobs.
+the single staging deployment job, so approval occurs after the base plan is
+generated. The AWS OIDC trust policy permits the `main` branch subject used by
+the planning job and the exact `staging` environment subject used by the
+approved deployment job.
 
 The OIDC trust policy must restrict the repository and approved branch or
 environment. The deployment role must have a separately reviewed
@@ -195,8 +192,9 @@ terraform -chdir=bootstrap/backend apply -var-file=bootstrap.tfvars
 
 4. Configure the repository variables and protected GitHub `staging`
    environment.
-5. Manually start `Stage deploy` with `deploy=true` after the workflow has
-   passed validation.
+5. Push to `main`; validation and the base plan run automatically. Approve the
+   single staging deployment gate when the plan is ready. Alternatively,
+   manually start `Stage deploy` with `deploy=true`.
 6. Provide a same-region DNS-validated ACM certificate ARN for HTTPS.
 7. Verify the resulting ALB URL and `/health`, `/ready`, and
    `/api/dashboard`.

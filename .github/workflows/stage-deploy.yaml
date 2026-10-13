@@ -12,7 +12,7 @@ on:
         required: false
         type: string
       deploy:
-        description: Generate reviewed plans and deploy to staging
+        description: Deploy to staging after validation
         required: true
         default: false
         type: boolean
@@ -64,7 +64,7 @@ jobs:
   base_plan:
     name: Generate base plan
     needs: validate
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy }}
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deploy) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -107,6 +107,18 @@ jobs:
           TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
           TF_STATE_REGION: ${{ vars.TF_STATE_REGION }}
         run: terraform init -input=false -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="region=$TF_STATE_REGION"
+      - name: Create staging variables
+        working-directory: environments/staging
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          PROJECT_NAME: ${{ vars.TF_PROJECT_NAME }}
+          CERTIFICATE_ARN: ${{ vars.CERTIFICATE_ARN }}
+        run: |
+          cat > terraform.tfvars <<EOF
+          aws_region = "$AWS_REGION"
+          project_name = "$PROJECT_NAME"
+          certificate_arn = "$CERTIFICATE_ARN"
+          EOF
       - name: Generate base plan
         working-directory: environments/staging
         run: terraform plan -input=false -out=base.tfplan -var-file=terraform.tfvars -var="image_tag=bootstrap" -var="desired_capacity=0" -var="min_size=0"
@@ -120,16 +132,14 @@ jobs:
           path: environments/staging/base.tfplan
           retention-days: 1
 
-  base_apply:
-    name: Approve and apply base plan
+  deploy_staging:
+    name: Approve and deploy staging
     needs: base_plan
     environment: staging
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
-    outputs:
-      repository: ${{ steps.ecr.outputs.repository }}
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
@@ -139,7 +149,7 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
-          role-session-name: github-${{ github.run_id }}-base-apply
+          role-session-name: github-${{ github.run_id }}-staging-deploy
       - name: Initialize Terraform
         working-directory: environments/staging
         env:
@@ -158,28 +168,11 @@ jobs:
         id: ecr
         working-directory: environments/staging
         run: echo "repository=$(terraform output -raw ecr_repository_url)" >> "$GITHUB_OUTPUT"
-
-  image:
-    name: Build or reuse immutable image
-    needs: base_apply
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    outputs:
-      image_tag: ${{ steps.image.outputs.image_tag }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-          role-session-name: github-${{ github.run_id }}-image
       - name: Build or verify immutable image
         id: image
         env:
           AWS_REGION: ${{ vars.AWS_REGION }}
-          ECR_REPOSITORY: ${{ needs.base_apply.outputs.repository }}
+          ECR_REPOSITORY: ${{ steps.ecr.outputs.repository }}
           REQUESTED_TAG: ${{ inputs.image_tag }}
           EXPECTED_REVISION: ${{ github.sha }}
         run: |
@@ -204,92 +197,14 @@ jobs:
             docker push "$ECR_REPOSITORY:$IMAGE_TAG"
           fi
           echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
-
-  rollout_plan:
-    name: Generate rollout plan
-    needs: [base_apply, image]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TERRAFORM_VERSION }}
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-          role-session-name: github-${{ github.run_id }}-rollout-plan
-      - name: Create staging variables
-        working-directory: environments/staging
-        env:
-          AWS_REGION: ${{ vars.AWS_REGION }}
-          PROJECT_NAME: ${{ vars.TF_PROJECT_NAME }}
-          CERTIFICATE_ARN: ${{ vars.CERTIFICATE_ARN }}
-          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-          TF_STATE_REGION: ${{ vars.TF_STATE_REGION }}
-        run: |
-          test -n "$AWS_REGION"
-          test -n "$PROJECT_NAME"
-          test -n "$TF_STATE_BUCKET"
-          test -n "$TF_STATE_REGION"
-          cat > terraform.tfvars <<EOF
-          aws_region = "$AWS_REGION"
-          project_name = "$PROJECT_NAME"
-          certificate_arn = "$CERTIFICATE_ARN"
-          EOF
-      - name: Initialize Terraform
-        working-directory: environments/staging
-        env:
-          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-          TF_STATE_REGION: ${{ vars.TF_STATE_REGION }}
-        run: terraform init -input=false -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="region=$TF_STATE_REGION"
       - name: Generate rollout plan
         working-directory: environments/staging
         env:
-          IMAGE_TAG: ${{ needs.image.outputs.image_tag }}
+          IMAGE_TAG: ${{ steps.image.outputs.image_tag }}
         run: terraform plan -input=false -out=rollout.tfplan -var-file=terraform.tfvars -var="image_tag=$IMAGE_TAG"
       - name: Display rollout plan
         working-directory: environments/staging
         run: terraform show -no-color rollout.tfplan
-      - name: Upload reviewed rollout plan
-        uses: actions/upload-artifact@v4
-        with:
-          name: staging-rollout-plan-${{ github.run_id }}
-          path: environments/staging/rollout.tfplan
-          retention-days: 1
-
-  rollout_apply:
-    name: Approve and apply rollout plan
-    needs: rollout_plan
-    environment: staging
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TERRAFORM_VERSION }}
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-          role-session-name: github-${{ github.run_id }}-rollout-apply
-      - name: Initialize Terraform
-        working-directory: environments/staging
-        env:
-          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-          TF_STATE_REGION: ${{ vars.TF_STATE_REGION }}
-        run: terraform init -input=false -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="region=$TF_STATE_REGION"
-      - name: Download reviewed rollout plan
-        uses: actions/download-artifact@v4
-        with:
-          name: staging-rollout-plan-${{ github.run_id }}
-          path: environments/staging
-      - name: Apply reviewed rollout plan
+      - name: Apply rollout plan
         working-directory: environments/staging
         run: terraform apply -input=false rollout.tfplan
