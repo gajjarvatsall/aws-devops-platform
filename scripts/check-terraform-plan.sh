@@ -29,24 +29,14 @@ delete_count="$(terraform show -json "$plan_file" |
 if (( delete_count > 0 )); then
   if [[ "$allow_destroy" != "true" ]]; then
     echo "Plan includes $delete_count delete/replace resource change(s)." >&2
-    echo "Attributes marked by Terraform as requiring replacement (values are omitted):" >&2
-    terraform show -no-color "$plan_file" |
-      awk '
-        /^  # .* (must be replaced|will be replaced)/ {
-          resource = $0
-          sub(/^  # /, "", resource)
-          sub(/ (must be replaced|will be replaced).*$/, "", resource)
-          next
-        }
-        /# forces replacement/ {
-          attribute = $0
-          sub(/=.*/, "", attribute)
-          gsub(/^[[:space:]~+!\/-]+/, "", attribute)
-          gsub(/[[:space:]]+$/, "", attribute)
-          printf "- %s: %s\n", resource, attribute
-        }
+    echo "Terraform replacement reason codes (no resource values are printed):" >&2
+    terraform show -json "$plan_file" |
+      jq -r '
+        .resource_changes[]?
+        | select(.change.actions | index("delete"))
+        | "- \(.address): reason=\(.action_reason // "unspecified"); replace_paths=\((.change.replace_paths // [] | map(map(tostring) | join(".")) | if length == 0 then "none reported" else join(", ") end))"
       ' >&2
-    echo "Review these replacement paths and correct the configuration/state mismatch before applying." >&2
+    echo "Review the reason codes before considering any replacement." >&2
     exit 1
   fi
   echo "Destructive changes explicitly allowed by workflow_dispatch input."
