@@ -4,7 +4,7 @@ This repository contains a staging-only AWS platform and a small Flask
 application for a technical assignment. It has not been deployed to AWS and
 contains no credentials or live endpoint.
 
-## Project structure
+## Project structure 
 
 ```text
 app/                         Flask service, Dockerfile, and tests
