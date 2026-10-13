@@ -76,6 +76,20 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - name: Validate AWS deployment configuration
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+          test -n "$AWS_REGION" || {
+            echo "::error::AWS_REGION Actions variable is not configured"
+            exit 1
+          }
+          test -n "$AWS_DEPLOY_ROLE_ARN" || {
+            echo "::error::AWS_DEPLOY_ROLE_ARN Actions variable is not configured"
+            exit 1
+          }
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
@@ -133,6 +147,20 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - name: Validate AWS deployment configuration
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+          test -n "$AWS_REGION" || {
+            echo "::error::AWS_REGION Actions variable is not configured"
+            exit 1
+          }
+          test -n "$AWS_DEPLOY_ROLE_ARN" || {
+            echo "::error::AWS_DEPLOY_ROLE_ARN Actions variable is not configured"
+            exit 1
+          }
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
