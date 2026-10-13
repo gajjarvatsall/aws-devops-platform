@@ -4,7 +4,7 @@ This repository contains a staging-only AWS platform and a small Flask
 application. AWS account resources and credentials are external to this
 repository; no AWS credentials or generated Terraform state belong in Git.
 
-## Project structure 
+## Project structure
 
 ```text
 app/                         Flask service, Dockerfile, and tests
