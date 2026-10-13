@@ -224,7 +224,14 @@ jobs:
         run: |
           set -euo pipefail
           REPOSITORY="$(terraform output -raw ecr_repository_url)"
-          [[ "$REPOSITORY" == *.dkr.ecr."$AWS_REGION".amazonaws.com/* ]]
+          EXPECTED_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          ACTUAL_REGISTRY="${REPOSITORY%%/*}"
+          if [[ "$REPOSITORY" != "$EXPECTED_REGISTRY/"* ]]; then
+            echo "Terraform state ECR output does not match the deployment account/region." >&2
+            echo "Expected registry: $EXPECTED_REGISTRY" >&2
+            echo "State registry:    $ACTUAL_REGISTRY" >&2
+            exit 1
+          fi
           echo "repository=$REPOSITORY" >> "$GITHUB_OUTPUT"
 
       - name: Log in to Amazon ECR
