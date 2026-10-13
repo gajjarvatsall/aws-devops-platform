@@ -118,7 +118,7 @@ jobs:
           aws autoscaling update-auto-scaling-group --auto-scaling-group-name "$ASG_NAME" --min-size 2 --desired-capacity 2
           if [[ "$RUNNING_BEFORE" =~ ^[1-9][0-9]*$ ]]; then
             REFRESH_ID="$(aws autoscaling start-instance-refresh --auto-scaling-group-name "$ASG_NAME" \
-              --preferences '{"MinHealthyPercentage":100,"MaxHealthyPercentage":200,"SkipMatching":false,"AutoRollback":true}' \
+              --preferences '{"MinHealthyPercentage":100,"MaxHealthyPercentage":200,"SkipMatching":false,"AutoRollback":false}' \
               --query InstanceRefreshId --output text)"
             echo "refresh_id=$REFRESH_ID" >> "$GITHUB_OUTPUT"
             DEADLINE=$((SECONDS + 1800))
