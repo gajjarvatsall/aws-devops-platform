@@ -89,7 +89,7 @@ dependency is the secret-read IAM policy before application capacity starts.
 environment.
 
 - `main.tf`: composes all modules and defines the staging runtime IAM policies.
-- `variables.tf`: region, capacity, RDS, networking, certificate, and image
+- `variables.tf`: region, capacity, RDS, networking, and image
   settings.
 - `providers.tf`: AWS provider configuration.
 - `backend.tf`: encrypted remote S3 state with native S3 lockfiles.
@@ -131,18 +131,10 @@ Manual runs are also supported by starting `workflow_dispatch` with
 can contain sensitive infrastructure values, so workflow access must be
 controlled.
 
-Required external configuration:
-
-```text
-CERTIFICATE_ARN
-```
-
 The workflow defines the fixed staging region, deployment role ARN, state
 bucket, state region, and project name directly. This avoids failing because
-non-secret values are missing from an Actions-variable scope. Create `CERTIFICATE_ARN` under **Repository Settings → Secrets and variables**,
-either as an Actions **Variable** or **Secret**, or define it on the protected
-`staging` Environment.
-Keep the Environment for required reviewers and deployment-branch restrictions.
+non-secret values are missing from an Actions-variable scope. Keep the
+`staging` Environment for required reviewers and deployment-branch restrictions.
 
 Configure the `staging` Environment with required reviewers and restrict its
 deployment branches to `main`. The single deployment job uses this Environment,
@@ -187,8 +179,7 @@ terraform -chdir=bootstrap/backend apply -var-file=bootstrap.tfvars
 5. Push to `main`; validation runs automatically and then the workflow pauses
    for one staging approval. Alternatively, manually start `Stage deploy` with
    `deploy=true`.
-6. Provide a same-region DNS-validated ACM certificate ARN for HTTPS.
-7. Verify the resulting ALB URL and `/health`, `/ready`, and
+6. Verify the resulting HTTP ALB URL and `/health`, `/ready`, and
    `/api/dashboard`.
 
 The approved workflow performs the infrastructure and image sequence after the
@@ -230,16 +221,15 @@ Use a private channel for security reports.
 ## Operations and troubleshooting
 
 Routine checks include ALB target health, 5xx/latency, Auto Scaling activity,
-CloudWatch application/bootstrap logs, RDS availability/backups, certificate
-expiry, `/health`, `/ready`, and `/api/dashboard`.
+CloudWatch application/bootstrap logs, RDS availability/backups, `/health`,
+`/ready`, and `/api/dashboard`.
 
 For an unhealthy target, inspect the target group, ALB security group,
 application port, `/health`, and container logs. For bootstrap or image
 failures, inspect `/var/log/cloud-init-output.log`, ECR permissions, region,
 repository URL, and the immutable image tag. For database failures, verify
 the secret ARN, IAM policy, security-group reference, routes, and RDS status
-without printing the secret. For certificate failures, verify same-region ACM
-validation and DNS records. For state-lock failures, identify the active run;
+without printing the secret. For state-lock failures, identify the active run;
 never delete a lock blindly.
 
 Rollback uses the previous immutable ECR tag through the same reviewed staging

@@ -3,16 +3,9 @@ locals { tags = merge(var.tags, { ManagedBy = "Terraform", Component = "security
 
 resource "aws_security_group" "alb" {
   name        = "${var.name}-alb"
-  description = "Public HTTPS entry point"
+  description = "Public HTTP entry point"
   vpc_id      = var.vpc_id
   tags        = merge(local.tags, { Name = "${var.name}-alb-sg" })
-}
-resource "aws_vpc_security_group_ingress_rule" "alb_https" {
-  security_group_id = aws_security_group.alb.id
-  cidr_ipv4         = "0.0.0.0/0"
-  from_port         = 443
-  to_port           = 443
-  ip_protocol       = "tcp"
 }
 resource "aws_vpc_security_group_ingress_rule" "alb_http" {
   count             = var.allowed_http ? 1 : 0

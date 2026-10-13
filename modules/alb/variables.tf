@@ -8,7 +8,6 @@ variable "health_check_path" {
   type    = string
   default = "/health"
 }
-variable "certificate_arn" { type = string }
 variable "tags" {
   type    = map(string)
   default = {}

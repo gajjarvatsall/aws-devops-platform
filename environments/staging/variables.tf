@@ -30,10 +30,6 @@ variable "image_tag" {
   type    = string
   default = "bootstrap"
 }
-variable "certificate_arn" {
-  type    = string
-  default = ""
-}
 variable "instance_type" {
   type    = string
   default = "t4g.small"

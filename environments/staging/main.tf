@@ -65,7 +65,6 @@ module "alb" {
   security_group_id = module.security_groups.alb_security_group_id
   logs_bucket_id    = module.s3.alb_logs_bucket_id
   app_port          = var.app_port
-  certificate_arn   = var.certificate_arn
   tags              = local.tags
 }
 

@@ -80,12 +80,6 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
-      - name: Validate staging deployment configuration
-        env:
-          CERTIFICATE_ARN: ${{ vars.CERTIFICATE_ARN || secrets.CERTIFICATE_ARN }}
-        run: |
-          set -euo pipefail
-          test -n "$CERTIFICATE_ARN" || { echo "::error::CERTIFICATE_ARN is missing from repository/staging variables or secrets"; exit 1; }
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
@@ -96,7 +90,6 @@ jobs:
         working-directory: environments/staging
         env:
           PROJECT_NAME: ${{ env.TF_PROJECT_NAME }}
-          CERTIFICATE_ARN: ${{ vars.CERTIFICATE_ARN || secrets.CERTIFICATE_ARN }}
         run: |
           test -n "$AWS_REGION"
           test -n "$PROJECT_NAME"
@@ -105,7 +98,6 @@ jobs:
           cat > terraform.tfvars <<EOF
           aws_region = "$AWS_REGION"
           project_name = "$PROJECT_NAME"
-          certificate_arn = "$CERTIFICATE_ARN"
           EOF
           echo "project_name=$PROJECT_NAME" >> "$GITHUB_OUTPUT"
       - name: Initialize Terraform
