@@ -111,6 +111,7 @@ jobs:
 
       - name: Activate staging capacity and refresh existing instances
         id: refresh
+        timeout-minutes: 35
         run: |
           set -euo pipefail
           RUNNING_BEFORE="$(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$ASG_NAME" \
@@ -123,8 +124,15 @@ jobs:
             echo "refresh_id=$REFRESH_ID" >> "$GITHUB_OUTPUT"
             DEADLINE=$((SECONDS + 1800))
             while (( SECONDS < DEADLINE )); do
-              STATUS="$(aws autoscaling describe-instance-refreshes --auto-scaling-group-name "$ASG_NAME" \
-                --instance-refresh-ids "$REFRESH_ID" --query 'InstanceRefreshes[0].Status' --output text)"
+              REFRESH="$(aws autoscaling describe-instance-refreshes --auto-scaling-group-name "$ASG_NAME" \
+                --instance-refresh-ids "$REFRESH_ID" --query 'InstanceRefreshes[0].{Status:Status,Reason:StatusReason,Percentage:PercentageComplete,Updated:InstancesUpdated,ToUpdate:InstancesToUpdate}' --output json)"
+              STATUS="$(jq -r '.Status' <<< "$REFRESH")"
+              echo "Instance refresh: $REFRESH"
+              TARGET_GROUP_ARN="$(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$ASG_NAME" \
+                --query 'AutoScalingGroups[0].TargetGroupARNs[0]' --output text)"
+              aws elbv2 describe-target-health --target-group-arn "$TARGET_GROUP_ARN" \
+                --query 'TargetHealthDescriptions[*].{Id:Target.Id,State:TargetHealth.State,Reason:TargetHealth.Reason,Description:TargetHealth.Description}' \
+                --output table || true
               case "$STATUS" in
                 Successful) break ;;
                 Failed|Cancelled|RollbackFailed|RollbackSuccessful)
@@ -133,7 +141,12 @@ jobs:
               esac
               sleep 15
             done
-            [[ "$STATUS" == "Successful" ]]
+            if [[ "$STATUS" != "Successful" ]]; then
+              aws autoscaling describe-instance-refreshes --auto-scaling-group-name "$ASG_NAME" \
+                --instance-refresh-ids "$REFRESH_ID" --output table
+              echo "Timed out waiting for Auto Scaling instance refresh." >&2
+              exit 1
+            fi
           else
             echo "No existing in-service instance; capacity activation will launch directly from the selected image."
           fi

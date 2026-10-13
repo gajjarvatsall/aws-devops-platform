@@ -242,9 +242,11 @@ The application release uses an Auto Scaling instance refresh without
 `AutoRollback` because the image is selected through the SSM parameter rather
 than an ASG launch-template desired configuration. To roll back safely, run
 the workflow with a previously verified immutable image tag. The application
-release health step prints each target's ID, state, reason, and
-description during polling, and fails after 15 minutes with the final target
-table. For an unhealthy target, inspect the target group, ALB security group,
+release prints refresh status, reason, and progress every 15 seconds, and
+prints each target's ID, state, reason, and description during both refresh and
+health polling. It fails
+with diagnostics if refresh exceeds 30 minutes or health checks exceed 15
+minutes. For an unhealthy target, inspect the target group, ALB security group,
 application port, `/health`, and container logs. For bootstrap or image
 failures, inspect `/var/log/cloud-init-output.log`, ECR permissions, region,
 repository URL, and the immutable image tag. For database failures, verify
