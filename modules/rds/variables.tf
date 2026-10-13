@@ -17,7 +17,7 @@ variable "master_username" {
 }
 variable "engine_version" {
   type    = string
-  default = "8.0.39"
+  default = null
 }
 variable "instance_class" {
   type    = string

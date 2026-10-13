@@ -48,7 +48,7 @@ variable "max_size" {
 }
 variable "database_engine_version" {
   type    = string
-  default = "8.0.39"
+  default = null
 }
 variable "database_instance_class" {
   type    = string
