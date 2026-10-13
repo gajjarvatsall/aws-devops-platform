@@ -142,7 +142,7 @@ resource "aws_iam_role_policy" "github_app_deploy" {
       { Effect = "Allow", Action = ["ecr:GetAuthorizationToken"], Resource = "*" },
       { Effect = "Allow", Action = ["ecr:BatchCheckLayerAvailability", "ecr:CompleteLayerUpload", "ecr:InitiateLayerUpload", "ecr:PutImage", "ecr:UploadLayerPart", "ecr:DescribeImages"], Resource = module.ecr.repository_arn },
       { Effect = "Allow", Action = ["ssm:PutParameter"], Resource = aws_ssm_parameter.image_tag.arn },
-      { Effect = "Allow", Action = ["autoscaling:UpdateAutoScalingGroup", "autoscaling:StartInstanceRefresh"], Resource = "arn:aws:autoscaling:${var.aws_region}:${data.aws_caller_identity.current.account_id}:autoScalingGroup:*:autoScalingGroupName:${local.name}-app-asg" },
+      { Effect = "Allow", Action = ["autoscaling:UpdateAutoScalingGroup", "autoscaling:StartInstanceRefresh"], Resource = module.autoscaling.autoscaling_group_arn },
       { Effect = "Allow", Action = ["autoscaling:DescribeAutoScalingGroups", "autoscaling:DescribeInstanceRefreshes", "elasticloadbalancing:DescribeTargetHealth", "elasticloadbalancing:DescribeLoadBalancers"], Resource = "*" }
     ]
   })
