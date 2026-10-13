@@ -226,6 +226,16 @@ jobs:
           REPOSITORY="$(terraform output -raw ecr_repository_url)"
           EXPECTED_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
           ACTUAL_REGISTRY="${REPOSITORY%%/*}"
+          if [[ -z "$REPOSITORY" ]]; then
+            echo "Terraform output ecr_repository_url is empty." >&2
+            STATE_ADDRESSES="$(terraform state list)"
+            if grep -Fxq 'module.ecr.aws_ecr_repository.this' <<< "$STATE_ADDRESSES"; then
+              echo "Terraform state tracks the ECR repository; its state/output needs reconciliation." >&2
+            else
+              echo "Terraform state does not track module.ecr.aws_ecr_repository.this." >&2
+            fi
+            exit 1
+          fi
           if [[ "$REPOSITORY" != "$EXPECTED_REGISTRY/"* ]]; then
             echo "Terraform state ECR output does not match the deployment account/region." >&2
             echo "Expected registry: $EXPECTED_REGISTRY" >&2
