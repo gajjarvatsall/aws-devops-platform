@@ -1,0 +1,49 @@
+flowchart TB
+    GH[GitHub Actions<br/>CI, Terraform plan/apply, app release]
+    Internet((Internet))
+    ECR[Private ECR<br/>immutable scanned images]
+    SSM[Systems Manager Parameter Store<br/>current image tag]
+    S3State[(Encrypted S3 Terraform state<br/>native state lock)]
+    subgraph AWS[ AWS account · ap-south-1 ]
+      subgraph VPC[VPC across two Availability Zones]
+        IGW[Internet Gateway]
+        ALB[Public Application Load Balancer<br/>HTTP :80 · access logs enabled]
+        Logs[(Private S3 ALB access logs)]
+        NAT1[NAT Gateway AZ-a]
+        NAT2[NAT Gateway AZ-b]
+        subgraph AZA[Availability Zone A]
+          AppA[Private app subnet<br/>EC2 Auto Scaling instance]
+          DBA[Private isolated DB subnet]
+        end
+        subgraph AZB[Availability Zone B]
+          AppB[Private app subnet<br/>EC2 Auto Scaling instance]
+          DBB[Private isolated DB subnet]
+        end
+        RDS[(Encrypted Multi-AZ MySQL RDS<br/>private subnets)]
+        Secret[Secrets Manager<br/>generated DB credentials]
+        CW[CloudWatch application logs]
+      end
+    end
+
+    Internet -->|HTTP :80| IGW --> ALB
+    ALB -->|app port :8080| AppA
+    ALB -->|app port :8080| AppB
+    ALB --> Logs
+    AppA -->|MySQL :3306| RDS
+    AppB -->|MySQL :3306| RDS
+    DBA --- RDS
+    DBB --- RDS
+    AppA --> CW
+    AppB --> CW
+    AppA -->|read secret via instance role| Secret
+    AppB -->|read secret via instance role| Secret
+    AppA -->|outbound via NAT| NAT1
+    AppB -->|outbound via NAT| NAT2
+    NAT1 --> IGW
+    NAT2 --> IGW
+    GH -->|GitHub OIDC short-lived roles| AWS
+    GH -->|push immutable image| ECR
+    GH -->|update current tag| SSM
+    GH -->|Terraform backend| S3State
+    ECR -->|pull image using instance role| AppA
+    ECR -->|pull image using instance role| AppB

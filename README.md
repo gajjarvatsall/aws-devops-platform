@@ -58,8 +58,8 @@ Every module contains Terraform resources in `main.tf`, inputs in
   and Secrets Manager secret.
 - `modules/s3`: private application and ALB log buckets, encryption,
   versioning, public-access blocking, policies, and lifecycle rules.
-- `modules/ecr`: private ECR repository, immutable tags, scanning, and
-  lifecycle policy.
+- `modules/ecr`: private ECR repository, immutable tags, scanning, and a
+  lifecycle policy retaining 30 recent commit builds and 20 recent releases.
 - `modules/alb`: Application Load Balancer, target group, listeners, and
   access logging.
 - `modules/autoscaling`: Amazon Linux launch template, Docker bootstrap,
@@ -153,7 +153,7 @@ The S3 bucket `aws-vg-cloudops-tf-state` in `ap-south-1` must exist before workf
 
 ### First deployment and routine changes
 
-For initial setup, merge the infrastructure PR, then manually run **Actions → Terraform apply → Run workflow** from `main` and approve the protected `staging` environment. It creates the ECR repository, SSM image parameter, ASG at zero capacity, and the dedicated plan/app roles. The plan role becomes available after this first apply, so the initial infrastructure PR needs a human-reviewed bootstrap exception if branch protection requires every check to pass. After bootstrap, infrastructure PRs receive the AWS-backed speculative plan. To start the app the first time, manually run **Actions → Application release → Run workflow** from `main` with `image_tag` blank. Later pushes changing `app/**` build and deploy automatically. To roll back, use that same manual workflow with an existing immutable ECR tag such as `sha-<commit>`.
+For initial setup, merge the infrastructure PR, then manually run **Actions → Terraform apply → Run workflow** from `main` and approve the protected `staging` environment. It creates the ECR repository, SSM image parameter, ASG at zero capacity, and the dedicated plan/app roles. The plan role becomes available after this first apply, so the initial infrastructure PR needs a human-reviewed bootstrap exception if branch protection requires every check to pass. After bootstrap, infrastructure PRs receive the AWS-backed speculative plan. To start the app the first time, manually run **Actions → Application release → Run workflow** from `main` with `image_tag` blank. Later pushes changing `app/**` build and deploy automatically; each release maintains at least two healthy app instances across the private subnets. The run summary records the image and generated HTTP URL. To roll back, use that same manual workflow with an existing immutable ECR tag such as `sha-<commit>`.
 
 The ALB serves HTTP because this setup has no domain name or ACM certificate. Use `/health` for the application liveness check; `/ready` also requires the database path to work.
 
@@ -163,13 +163,14 @@ The ALB serves HTTP because this setup has no domain name or ACM certificate. Us
 - EC2 and RDS are private and use security-group references.
 - RDS and S3 are encrypted; S3 requires TLS and blocks public access.
 - EC2 requires IMDSv2 and uses an encrypted EBS volume.
-- ECR tags are immutable and scan on push. Re-running a commit deployment
+- ECR tags are immutable and scan on push. The lifecycle policy retains the 30
+  newest `sha-*` builds and 20 newest `v*` releases; untagged images expire
+  after 7 days. Re-running a commit deployment
   reuses an existing `sha-*` image only after pulling it and verifying its
   OCI revision label matches the workflow commit. A rollback tag must already
-  exist and have a revision label; it is never overwritten. Tagged images are
-  retained so an Auto Scaling replacement can still pull the version named in
-  its launch template. Untagged images expire after 7 days; clean up old tagged
-  images only after confirming no launch template or rollback process uses them.
+  exist and have a revision label; it is never overwritten. Confirm a launch
+  template or rollback process no longer references an image before it falls
+  outside the retained image count.
 - The runtime role is limited to the ECR repository, CloudWatch log group,
   application bucket, database secret, and read-only live dashboard APIs.
 - GitHub uses short-lived OIDC credentials instead of static keys.

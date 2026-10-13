@@ -115,7 +115,7 @@ jobs:
           set -euo pipefail
           RUNNING_BEFORE="$(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$ASG_NAME" \
             --query 'AutoScalingGroups[0].Instances[?LifecycleState==`InService`]|length(@)' --output text)"
-          aws autoscaling update-auto-scaling-group --auto-scaling-group-name "$ASG_NAME" --min-size 1 --desired-capacity 1
+          aws autoscaling update-auto-scaling-group --auto-scaling-group-name "$ASG_NAME" --min-size 2 --desired-capacity 2
           if [[ "$RUNNING_BEFORE" =~ ^[1-9][0-9]*$ ]]; then
             REFRESH_ID="$(aws autoscaling start-instance-refresh --auto-scaling-group-name "$ASG_NAME" \
               --preferences '{"MinHealthyPercentage":100,"MaxHealthyPercentage":200,"SkipMatching":false,"AutoRollback":true}' \
@@ -149,13 +149,21 @@ jobs:
           while (( SECONDS < DEADLINE )); do
             HEALTHY="$(aws elbv2 describe-target-health --target-group-arn "$TARGET_GROUP_ARN" \
               --query 'length(TargetHealthDescriptions[?TargetHealth.State==`healthy`])' --output text)"
-            if (( HEALTHY >= 1 )); then break; fi
+            if (( HEALTHY >= 2 )); then break; fi
             sleep 15
           done
-          if (( HEALTHY < 1 )); then
+          if (( HEALTHY < 2 )); then
             aws elbv2 describe-target-health --target-group-arn "$TARGET_GROUP_ARN" --output table
             echo "Timed out waiting for a healthy staging target." >&2
             exit 1
           fi
           curl --fail --silent --show-error --retry 10 --retry-delay 6 "http://$ALB_DNS/health"
-          echo "Staging is healthy at http://$ALB_DNS"
+          APP_URL="http://$ALB_DNS"
+          echo "Staging is healthy at $APP_URL"
+          {
+            echo "## Staging application release"
+            echo "- Image: $ECR_REPOSITORY:${{ steps.image.outputs.tag }}"
+            echo "- Healthy targets: $HEALTHY"
+            echo "- Application URL: $APP_URL"
+            echo "- Health check: $APP_URL/health"
+          } >> "$GITHUB_STEP_SUMMARY"
