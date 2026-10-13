@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       recover_tainted_state:
-        description: Clear taint markers on the six resources left tainted by earlier partial creates
+        description: Clear stale taint markers on known staging resources from earlier partial applies
         required: true
         default: false
         type: boolean
@@ -61,12 +61,26 @@ jobs:
         working-directory: environments/staging
         run: |
           set -euo pipefail
-          terraform untaint -lock-timeout=5m module.rds.aws_secretsmanager_secret.db
-          terraform untaint -lock-timeout=5m module.s3.aws_s3_bucket.alb_logs
-          terraform untaint -lock-timeout=5m module.s3.aws_s3_bucket.app
-          terraform untaint -lock-timeout=5m 'module.vpc.aws_eip.nat[0]'
-          terraform untaint -lock-timeout=5m 'module.vpc.aws_eip.nat[1]'
-          terraform untaint -lock-timeout=5m module.vpc.aws_vpc.this
+          addresses=(
+            module.rds.aws_secretsmanager_secret.db
+            module.s3.aws_s3_bucket.alb_logs
+            module.s3.aws_s3_bucket.app
+            'module.vpc.aws_eip.nat[0]'
+            'module.vpc.aws_eip.nat[1]'
+            module.vpc.aws_vpc.this
+            aws_iam_role.github_app_deploy
+            aws_iam_role.github_terraform_plan
+            module.security_groups.aws_iam_role.ec2
+          )
+
+          for address in "${addresses[@]}"; do
+            first_line=$(terraform state show -no-color "$address" | head -n 1)
+            if [[ "$first_line" == *"(tainted)"* ]]; then
+              terraform untaint -lock-timeout=5m "$address"
+            else
+              echo "Skipping $address: state does not mark it tainted."
+            fi
+          done
 
       - name: Plan and apply infrastructure
         working-directory: environments/staging
