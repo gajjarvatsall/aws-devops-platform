@@ -76,8 +76,13 @@ jobs:
             aws_iam_role.github_terraform_plan
             module.security_groups.aws_iam_role.ec2
           )
+          state_addresses=$(terraform state list -no-color)
 
           for address in "${addresses[@]}"; do
+            if ! grep -Fqx -- "$address" <<< "$state_addresses"; then
+              echo "Skipping $address: resource is not present in state."
+              continue
+            fi
             state_output=$(terraform state show -no-color "$address")
             first_line=${state_output%%$'\n'*}
             if [[ "$first_line" == *"(tainted)"* ]]; then
