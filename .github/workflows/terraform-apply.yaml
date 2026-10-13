@@ -62,6 +62,9 @@ jobs:
         run: |
           set -euo pipefail
           addresses=(
+            aws_ssm_parameter.image_tag
+            module.alb.aws_lb.this
+            module.alb.aws_lb_target_group.app
             module.rds.aws_secretsmanager_secret.db
             module.s3.aws_s3_bucket.alb_logs
             module.s3.aws_s3_bucket.app
