@@ -29,7 +29,14 @@ delete_count="$(terraform show -json "$plan_file" |
 if (( delete_count > 0 )); then
   if [[ "$allow_destroy" != "true" ]]; then
     echo "Plan includes $delete_count delete/replace resource change(s)." >&2
-    echo "Review the plan and rerun manually with allow_destroy=true only if intended." >&2
+    echo "Replacement reasons (resource addresses and changed attribute paths only):" >&2
+    terraform show -json "$plan_file" |
+      jq -r '
+        .resource_changes[]?
+        | select(.change.actions | index("delete"))
+        | "- \(.address): \((.change.replace_paths // []) | map(map(tostring) | join(".")) | if length == 0 then "provider did not report attribute paths" else join(", ") end)"
+      ' >&2
+    echo "Review these replacement paths and correct the configuration/state mismatch before applying." >&2
     exit 1
   fi
   echo "Destructive changes explicitly allowed by workflow_dispatch input."
