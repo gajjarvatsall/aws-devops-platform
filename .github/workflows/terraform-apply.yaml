@@ -2,6 +2,12 @@ name: Terraform apply
 
 on:
   workflow_dispatch:
+    inputs:
+      recover_tainted_state:
+        description: Clear taint markers on the six resources left tainted by earlier partial creates
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -49,6 +55,18 @@ jobs:
           terraform init -input=false -lockfile=readonly
           -backend-config="bucket=$TF_STATE_BUCKET"
           -backend-config="region=$AWS_REGION"
+
+      - name: Recover tainted resources from earlier partial creates
+        if: ${{ inputs.recover_tainted_state }}
+        working-directory: environments/staging
+        run: |
+          set -euo pipefail
+          terraform untaint -lock-timeout=5m module.rds.aws_secretsmanager_secret.db
+          terraform untaint -lock-timeout=5m module.s3.aws_s3_bucket.alb_logs
+          terraform untaint -lock-timeout=5m module.s3.aws_s3_bucket.app
+          terraform untaint -lock-timeout=5m 'module.vpc.aws_eip.nat[0]'
+          terraform untaint -lock-timeout=5m 'module.vpc.aws_eip.nat[1]'
+          terraform untaint -lock-timeout=5m module.vpc.aws_vpc.this
 
       - name: Plan and apply infrastructure
         working-directory: environments/staging
