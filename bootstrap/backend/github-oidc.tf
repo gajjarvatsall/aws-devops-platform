@@ -1,3 +1,10 @@
+locals {
+  github_repository_parts = split("/", var.github_repository)
+  github_owner_name       = local.github_repository_parts[0]
+  github_repository_name  = local.github_repository_parts[1]
+  github_oidc_subject = "repo:${local.github_owner_name}@${var.github_owner_id}/${local.github_repository_name}@${var.github_repository_id}:environment:${var.github_environment}"
+}
+
 resource "aws_iam_role" "github_deploy" {
   count = var.create_github_oidc_role ? 1 : 0
   name  = "cloudops-github-terraform-deploy"
@@ -10,12 +17,7 @@ resource "aws_iam_role" "github_deploy" {
       Condition = {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-        }
-        StringLike = {
-          "token.actions.githubusercontent.com:sub" = [
-            "repo:${var.github_repository}:ref:${var.github_branch}",
-            "repo:${var.github_repository}:environment:${var.github_environment}",
-          ]
+          "token.actions.githubusercontent.com:sub" = local.github_oidc_subject
         }
       }
     }]

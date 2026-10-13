@@ -23,11 +23,15 @@ variable "github_oidc_provider_arn" {
 }
 variable "github_repository" {
   type    = string
-  default = "ORG/REPOSITORY"
+  default = "gajjarvatsall/aws-devops-platform"
 }
-variable "github_branch" {
+variable "github_owner_id" {
   type    = string
-  default = "refs/heads/main"
+  default = "82715470"
+}
+variable "github_repository_id" {
+  type    = string
+  default = "1415557208"
 }
 variable "github_environment" {
   type    = string

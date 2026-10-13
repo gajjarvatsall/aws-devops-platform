@@ -7,12 +7,22 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      deploy:
+        description: Deploy this run to staging
+        required: true
+        default: false
+        type: boolean
+      bootstrap:
+        description: Create staging infrastructure from an empty Terraform state
+        required: true
+        default: false
+        type: boolean
       image_tag:
-        description: Existing immutable tag to deploy; defaults to sha- plus the commit SHA
+        description: Existing immutable ECR tag to roll back to (leave blank to build this commit)
         required: false
         type: string
-      deploy:
-        description: Deploy to staging after validation
+      allow_destroy:
+        description: Allow Terraform plans that delete or replace resources
         required: true
         default: false
         type: boolean
@@ -20,141 +30,298 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: stage-deploy
-  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
 
 env:
   TERRAFORM_VERSION: "1.15.8"
   PYTHON_VERSION: "3.12"
+  AWS_ACCOUNT_ID: "337909740274"
   AWS_REGION: "ap-south-1"
   AWS_DEPLOY_ROLE_ARN: "arn:aws:iam::337909740274:role/cloudops-github-terraform-deploy"
   TF_STATE_BUCKET: "aws-vg-cloudops-tf-state"
   TF_STATE_REGION: "ap-south-1"
   TF_PROJECT_NAME: "cloudops-demo"
+  TF_DESIRED_CAPACITY: "1"
+  TF_MIN_SIZE: "1"
+  TF_MAX_SIZE: "4"
+  TF_NAT_GATEWAY_COUNT: "2"
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "0"
+
+concurrency:
+  group: stage-deploy-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   validate:
-    name: Test and validate
+    name: Validate source and infrastructure
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: app/requirements.txt
-      - name: Install application dependencies
-        run: python -m pip install -r app/requirements.txt
+          cache-dependency-path: app/requirements-dev.txt
+
+      - name: Install development dependencies
+        run: python -m pip install --requirement app/requirements-dev.txt
+
       - name: Run application tests
         run: python -m pytest app/tests
-      - name: Run application lint
+
+      - name: Lint application
         run: python -m ruff check app
+
       - name: Audit Python dependencies
-        run: python -m pip_audit -r app/requirements.txt
+        run: python -m pip_audit --requirement app/requirements-dev.txt
+
+      - name: Check for committed credentials
+        run: ./scripts/validate-config.sh
+
       - name: Build application image
-        run: docker build --tag cloudops-demo:${{ github.sha }} ./app
-      - uses: hashicorp/setup-terraform@v3
+        run: docker build --tag cloudops-demo:${GITHUB_SHA} ./app
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
-      - name: Format Terraform
+          terraform_wrapper: false
+
+      - name: Check Terraform formatting
         run: terraform fmt -check -recursive
-      - name: Validate Terraform roots
+
+      - name: Validate Terraform configurations
         run: |
+          set -euo pipefail
           for directory in bootstrap/backend environments/staging modules/*; do
-            terraform -chdir="$directory" init -backend=false -input=false
-            terraform -chdir="$directory" validate
+            terraform -chdir="$directory" init -backend=false -input=false -lockfile=readonly
+            terraform -chdir="$directory" validate -no-color
           done
 
   deploy_staging:
-    name: Approve and deploy staging
+    name: Deploy staging
     needs: validate
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deploy) }}
-    environment: staging
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' && inputs.deploy
     runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment:
+      name: staging
+    concurrency:
+      group: staging-deployment
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
-      - uses: aws-actions/configure-aws-credentials@v4
+          terraform_wrapper: false
+
+      - name: Validate deployment settings
+        run: |
+          set -euo pipefail
+          test "$AWS_ACCOUNT_ID" = "337909740274"
+          test "$AWS_DEPLOY_ROLE_ARN" = "arn:aws:iam::$AWS_ACCOUNT_ID:role/cloudops-github-terraform-deploy"
+          test -n "$AWS_REGION"
+          test -n "$TF_STATE_BUCKET"
+          test -n "$TF_STATE_REGION"
+          test -n "$TF_PROJECT_NAME"
+          [[ "$TF_DESIRED_CAPACITY" =~ ^[1-9][0-9]*$ ]]
+          [[ "$TF_MIN_SIZE" =~ ^[1-9][0-9]*$ ]]
+          [[ "$TF_MAX_SIZE" =~ ^[1-9][0-9]*$ ]]
+          (( TF_MIN_SIZE <= TF_DESIRED_CAPACITY && TF_DESIRED_CAPACITY <= TF_MAX_SIZE ))
+          [[ "$TF_NAT_GATEWAY_COUNT" =~ ^[1-2]$ ]]
+          if [[ "${{ inputs.bootstrap }}" == "true" && "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
+            echo "Bootstrap can only be started with workflow_dispatch." >&2
+            exit 1
+          fi
+          if [[ "${{ inputs.bootstrap }}" == "true" && -n "${{ inputs.image_tag }}" ]]; then
+            echo "Do not combine bootstrap with a rollback image tag." >&2
+            exit 1
+          fi
+
+      - name: Configure AWS credentials with GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@v6.3.0
         with:
           role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: github-${{ github.run_id }}-base-plan
-      - name: Create staging variables
-        id: config
-        working-directory: environments/staging
-        env:
-          PROJECT_NAME: ${{ env.TF_PROJECT_NAME }}
+          role-session-name: stage-${{ github.run_id }}
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
+
+      - name: Confirm AWS identity
         run: |
-          test -n "$AWS_REGION"
-          test -n "$PROJECT_NAME"
-          test -n "$TF_STATE_BUCKET"
-          test -n "$TF_STATE_REGION"
-          cat > terraform.tfvars <<EOF
-          aws_region = "$AWS_REGION"
-          project_name = "$PROJECT_NAME"
-          EOF
-          echo "project_name=$PROJECT_NAME" >> "$GITHUB_OUTPUT"
-      - name: Initialize Terraform
+          set -euo pipefail
+          ACTUAL_ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+          test "$ACTUAL_ACCOUNT" = "$AWS_ACCOUNT_ID"
+          aws sts get-caller-identity --query '{Account:Account,Arn:Arn}' --output json
+
+      - name: Initialize staging state
+        working-directory: environments/staging
+        run: >-
+          terraform init -input=false -lockfile=readonly
+          -backend-config="bucket=$TF_STATE_BUCKET"
+          -backend-config="region=$TF_STATE_REGION"
+
+      - name: Verify bootstrap or existing deployment state
+        id: state
         working-directory: environments/staging
         env:
-          TF_STATE_BUCKET: ${{ env.TF_STATE_BUCKET }}
-          TF_STATE_REGION: ${{ env.TF_STATE_REGION }}
-        run: terraform init -input=false -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="region=$TF_STATE_REGION"
-      - name: Generate base plan
+          BOOTSTRAP: ${{ inputs.bootstrap }}
+        run: |
+          set -euo pipefail
+          if [[ "$BOOTSTRAP" == "true" ]]; then
+            if terraform output -raw ecr_repository_url >/dev/null 2>&1; then
+              echo "Staging already has Terraform outputs. Run a normal deployment instead of bootstrap." >&2
+              exit 1
+            fi
+            echo "mode=bootstrap" >> "$GITHUB_OUTPUT"
+          else
+            if ! terraform output -raw ecr_repository_url >/dev/null 2>&1; then
+              echo "No initialized staging deployment was found. Start workflow_dispatch with bootstrap=true." >&2
+              exit 1
+            fi
+            echo "mode=rollout" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create zero-capacity foundation
+        if: steps.state.outputs.mode == 'bootstrap'
         working-directory: environments/staging
-        run: terraform plan -input=false -out=base.tfplan -var-file=terraform.tfvars -var="image_tag=bootstrap" -var="desired_capacity=0" -var="min_size=0"
-      - name: Display base plan
-        working-directory: environments/staging
-        run: terraform show -no-color base.tfplan
-      - name: Apply base plan
-        working-directory: environments/staging
-        run: terraform apply -input=false base.tfplan
-      - name: Read ECR repository URL
+        run: |
+          set -euo pipefail
+          if ! terraform plan -input=false -no-color -out=foundation.tfplan \
+            -var="aws_region=$AWS_REGION" -var="project_name=$TF_PROJECT_NAME" \
+            -var="nat_gateway_count=$TF_NAT_GATEWAY_COUNT" -var="image_tag=bootstrap" \
+            -var="desired_capacity=0" -var="min_size=0" -var="max_size=$TF_MAX_SIZE" \
+            > "$RUNNER_TEMP/foundation-plan.log" 2>&1; then
+            grep -m 5 '^Error:' "$RUNNER_TEMP/foundation-plan.log" >&2 || true
+            echo "Terraform foundation planning failed. Detailed plan output was withheld from the Actions log." >&2
+            exit 1
+          fi
+          bash ../../scripts/check-terraform-plan.sh foundation.tfplan false
+          terraform apply -input=false foundation.tfplan
+
+      - name: Read ECR repository
         id: ecr
         working-directory: environments/staging
-        run: echo "repository=$(terraform output -raw ecr_repository_url)" >> "$GITHUB_OUTPUT"
-      - name: Build or verify immutable image
+        run: |
+          set -euo pipefail
+          REPOSITORY="$(terraform output -raw ecr_repository_url)"
+          [[ "$REPOSITORY" == *.dkr.ecr."$AWS_REGION".amazonaws.com/* ]]
+          echo "repository=$REPOSITORY" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to Amazon ECR
+        env:
+          ECR_REPOSITORY: ${{ steps.ecr.outputs.repository }}
+        run: |
+          set -euo pipefail
+          REGISTRY="${ECR_REPOSITORY%%/*}"
+          aws ecr get-login-password --region "$AWS_REGION" |
+            docker login --username AWS --password-stdin "$REGISTRY"
+
+      - name: Build or verify immutable application image
         id: image
         env:
           ECR_REPOSITORY: ${{ steps.ecr.outputs.repository }}
           REQUESTED_TAG: ${{ inputs.image_tag }}
-          EXPECTED_REVISION: ${{ github.sha }}
         run: |
           set -euo pipefail
-          IMAGE_TAG="${REQUESTED_TAG:-sha-${EXPECTED_REVISION}}"
-          REGISTRY="${ECR_REPOSITORY%%/*}"
-          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$REGISTRY"
-          if aws ecr describe-images --repository-name "${ECR_REPOSITORY#*/}" --image-ids imageTag="$IMAGE_TAG" >/dev/null 2>&1; then
-            docker pull "$ECR_REPOSITORY:$IMAGE_TAG"
-            REVISION="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$ECR_REPOSITORY:$IMAGE_TAG")"
-            test "$REVISION" != "<no value>"
-            test -n "$REVISION"
-            if [ -n "$REQUESTED_TAG" ]; then
-              echo "Reusing existing rollback image $IMAGE_TAG with revision $REVISION"
-            else
-              test "$REVISION" = "$EXPECTED_REVISION"
-              echo "Reusing existing image $IMAGE_TAG for this commit"
+          REPOSITORY_NAME="${ECR_REPOSITORY#*/}"
+          IMAGE_TAG="${REQUESTED_TAG:-sha-${GITHUB_SHA}}"
+          [[ "$IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]
+          ERROR_FILE="$RUNNER_TEMP/ecr-describe-error"
+
+          if [[ -n "$REQUESTED_TAG" ]]; then
+            if ! aws ecr describe-images --repository-name "$REPOSITORY_NAME" \
+              --image-ids "imageTag=$IMAGE_TAG" >/dev/null 2>"$ERROR_FILE"; then
+              cat "$ERROR_FILE" >&2
+              exit 1
             fi
+            docker pull "$ECR_REPOSITORY:$IMAGE_TAG"
+            REVISION="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$ECR_REPOSITORY:$IMAGE_TAG")"
+            [[ "$REVISION" =~ ^[0-9a-f]{40}$ ]]
+            echo "Using existing immutable rollback image $IMAGE_TAG at $REVISION"
+          elif aws ecr describe-images --repository-name "$REPOSITORY_NAME" \
+            --image-ids "imageTag=$IMAGE_TAG" >/dev/null 2>"$ERROR_FILE"; then
+            docker pull "$ECR_REPOSITORY:$IMAGE_TAG"
+            REVISION="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$ECR_REPOSITORY:$IMAGE_TAG")"
+            test "$REVISION" = "$GITHUB_SHA"
+            echo "Reusing the image already built for this commit."
           else
-            test -z "$REQUESTED_TAG"
-            docker build --label "org.opencontainers.image.revision=$EXPECTED_REVISION" --tag "$ECR_REPOSITORY:$IMAGE_TAG" ./app
+            if ! grep -q 'ImageNotFoundException' "$ERROR_FILE"; then
+              cat "$ERROR_FILE" >&2
+              exit 1
+            fi
+            docker build --pull \
+              --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+              --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+              --tag "$ECR_REPOSITORY:$IMAGE_TAG" ./app
             docker push "$ECR_REPOSITORY:$IMAGE_TAG"
           fi
           echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
-      - name: Generate rollout plan
+
+      - name: Plan and apply staging rollout
         working-directory: environments/staging
         env:
           IMAGE_TAG: ${{ steps.image.outputs.image_tag }}
-        run: terraform plan -input=false -out=rollout.tfplan -var-file=terraform.tfvars -var="image_tag=$IMAGE_TAG"
-      - name: Display rollout plan
+          ALLOW_DESTROY: ${{ inputs.allow_destroy }}
+        run: |
+          set -euo pipefail
+          if ! terraform plan -input=false -no-color -out=rollout.tfplan \
+            -var="aws_region=$AWS_REGION" -var="project_name=$TF_PROJECT_NAME" \
+            -var="nat_gateway_count=$TF_NAT_GATEWAY_COUNT" -var="image_tag=$IMAGE_TAG" \
+            -var="desired_capacity=$TF_DESIRED_CAPACITY" \
+            -var="min_size=$TF_MIN_SIZE" -var="max_size=$TF_MAX_SIZE" \
+            > "$RUNNER_TEMP/rollout-plan.log" 2>&1; then
+            grep -m 5 '^Error:' "$RUNNER_TEMP/rollout-plan.log" >&2 || true
+            echo "Terraform rollout planning failed. Detailed plan output was withheld from the Actions log." >&2
+            exit 1
+          fi
+          bash ../../scripts/check-terraform-plan.sh rollout.tfplan "$ALLOW_DESTROY"
+          terraform apply -input=false rollout.tfplan
+
+      - name: Wait for healthy application targets
         working-directory: environments/staging
-        run: terraform show -no-color rollout.tfplan
-      - name: Apply rollout plan
-        working-directory: environments/staging
-        run: terraform apply -input=false rollout.tfplan
+        env:
+          EXPECTED_TARGETS: ${{ env.TF_DESIRED_CAPACITY }}
+        run: |
+          set -euo pipefail
+          TARGET_GROUP_ARN="$(terraform output -raw target_group_arn)"
+          ALB_DNS_NAME="$(terraform output -raw alb_dns_name)"
+          DEADLINE=$((SECONDS + 900))
+          HEALTHY=0
+          while (( SECONDS < DEADLINE )); do
+            HEALTHY="$(aws elbv2 describe-target-health --target-group-arn "$TARGET_GROUP_ARN" \
+              --query 'length(TargetHealthDescriptions[?TargetHealth.State==`healthy`])' --output text)"
+            if (( HEALTHY >= EXPECTED_TARGETS )); then
+              break
+            fi
+            sleep 15
+          done
+          if (( HEALTHY < EXPECTED_TARGETS )); then
+            aws elbv2 describe-target-health --target-group-arn "$TARGET_GROUP_ARN" \
+              --query 'TargetHealthDescriptions[].{Target:Target.Id,State:TargetHealth.State,Reason:TargetHealth.Reason}' \
+              --output table
+            echo "Timed out waiting for $EXPECTED_TARGETS healthy application target(s)." >&2
+            exit 1
+          fi
+          curl --fail --silent --show-error --retry 10 --retry-delay 6 \
+            "http://$ALB_DNS_NAME/health"
+          echo "Staging is healthy at http://$ALB_DNS_NAME"

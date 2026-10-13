@@ -1,4 +1,11 @@
-aws_region = "us-east-1"
-state_bucket_name = "replace-with-globally-unique-cloudops-tf-state"
+aws_region = "ap-south-1"
+state_bucket_name = "aws-vg-cloudops-tf-state"
 tags = { Project = "cloudops-demo", Environment = "bootstrap" }
+
+# Set true only when creating or importing the GitHub deployment role.
+create_github_oidc_role = false
+github_oidc_provider_arn = "arn:aws:iam::337909740274:oidc-provider/token.actions.githubusercontent.com"
+github_repository = "gajjarvatsall/aws-devops-platform"
+github_owner_id = "82715470"
+github_repository_id = "1415557208"
 github_environment = "staging"
