@@ -32,7 +32,7 @@ jobs:
       TF_STATE_BUCKET: aws-vg-cloudops-tf-state
       TF_PROJECT_NAME: cloudops-demo
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
