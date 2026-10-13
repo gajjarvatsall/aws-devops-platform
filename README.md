@@ -238,7 +238,9 @@ the Auto Scaling Group, and then the normal plan safety check runs again. If
 the replacement remains after recovery, stop and review the resource state
 instead of approving it.
 
-For an unhealthy target, inspect the target group, ALB security group,
+The application release health step prints each target's ID, state, reason, and
+description during polling, and fails after 15 minutes with the final target
+table. For an unhealthy target, inspect the target group, ALB security group,
 application port, `/health`, and container logs. For bootstrap or image
 failures, inspect `/var/log/cloud-init-output.log`, ECR permissions, region,
 repository URL, and the immutable image tag. For database failures, verify

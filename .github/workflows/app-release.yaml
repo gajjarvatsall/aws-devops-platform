@@ -139,21 +139,27 @@ jobs:
           fi
 
       - name: Wait for healthy application targets
+        timeout-minutes: 20
         run: |
           set -euo pipefail
-          TARGET_GROUP_ARN="$(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$ASG_NAME" \
+          AWS_ARGS=(--region "$AWS_REGION" --cli-connect-timeout 10 --cli-read-timeout 20)
+          TARGET_GROUP_ARN="$(aws "${AWS_ARGS[@]}" autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$ASG_NAME" \
             --query 'AutoScalingGroups[0].TargetGroupARNs[0]' --output text)"
-          ALB_DNS="$(aws elbv2 describe-load-balancers --names "$ALB_NAME" --query 'LoadBalancers[0].DNSName' --output text)"
+          ALB_DNS="$(aws "${AWS_ARGS[@]}" elbv2 describe-load-balancers --names "$ALB_NAME" --query 'LoadBalancers[0].DNSName' --output text)"
           DEADLINE=$((SECONDS + 900))
           HEALTHY=0
           while (( SECONDS < DEADLINE )); do
-            HEALTHY="$(aws elbv2 describe-target-health --target-group-arn "$TARGET_GROUP_ARN" \
+            TARGET_HEALTH="$(aws "${AWS_ARGS[@]}" elbv2 describe-target-health --target-group-arn "$TARGET_GROUP_ARN" \
+              --query 'TargetHealthDescriptions[*].{Id:Target.Id,State:TargetHealth.State,Reason:TargetHealth.Reason,Description:TargetHealth.Description}' \
+              --output table)"
+            printf '%s\n' "$TARGET_HEALTH"
+            HEALTHY="$(aws "${AWS_ARGS[@]}" elbv2 describe-target-health --target-group-arn "$TARGET_GROUP_ARN" \
               --query 'length(TargetHealthDescriptions[?TargetHealth.State==`healthy`])' --output text)"
             if (( HEALTHY >= 2 )); then break; fi
             sleep 15
           done
           if (( HEALTHY < 2 )); then
-            aws elbv2 describe-target-health --target-group-arn "$TARGET_GROUP_ARN" --output table
+            aws "${AWS_ARGS[@]}" elbv2 describe-target-health --target-group-arn "$TARGET_GROUP_ARN" --output table
             echo "Timed out waiting for a healthy staging target." >&2
             exit 1
           fi
