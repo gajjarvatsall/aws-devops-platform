@@ -2,7 +2,7 @@ locals {
   github_repository_parts = split("/", var.github_repository)
   github_owner_name       = local.github_repository_parts[0]
   github_repository_name  = local.github_repository_parts[1]
-  github_oidc_subject = "repo:${local.github_owner_name}@${var.github_owner_id}/${local.github_repository_name}@${var.github_repository_id}:environment:${var.github_environment}"
+  github_oidc_subject     = "repo:${local.github_owner_name}@${var.github_owner_id}/${local.github_repository_name}@${var.github_repository_id}:environment:${var.github_environment}"
 }
 
 resource "aws_iam_role" "github_deploy" {
