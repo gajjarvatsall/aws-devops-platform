@@ -74,7 +74,8 @@ jobs:
           )
 
           for address in "${addresses[@]}"; do
-            first_line=$(terraform state show -no-color "$address" | head -n 1)
+            state_output=$(terraform state show -no-color "$address")
+            first_line=${state_output%%$'\n'*}
             if [[ "$first_line" == *"(tainted)"* ]]; then
               terraform untaint -lock-timeout=5m "$address"
             else
