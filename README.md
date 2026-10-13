@@ -139,9 +139,9 @@ CERTIFICATE_ARN
 
 The workflow defines the fixed staging region, deployment role ARN, state
 bucket, state region, and project name directly. This avoids failing because
-non-secret values are missing from an Actions-variable scope. Create only
-`CERTIFICATE_ARN` under **Repository Settings → Secrets and variables →
-Actions → Variables**, or as a variable on the protected `staging` Environment.
+non-secret values are missing from an Actions-variable scope. Create `CERTIFICATE_ARN` under **Repository Settings → Secrets and variables**,
+either as an Actions **Variable** or **Secret**, or define it on the protected
+`staging` Environment.
 Keep the Environment for required reviewers and deployment-branch restrictions.
 
 Configure the `staging` Environment with required reviewers and restrict its
