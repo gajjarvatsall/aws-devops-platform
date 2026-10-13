@@ -138,7 +138,28 @@ The existing `cloudops-github-terraform-deploy` role must trust only the `stagin
 repo:gajjarvatsall@82715470/aws-devops-platform@1415557208:environment:staging
 ```
 
-Its existing permission policy must allow Terraform to manage this staging environment, create/update the two dedicated GitHub roles and inline policies (`iam:CreateRole`, `iam:PutRolePolicy`, `iam:UpdateAssumeRolePolicy`, and role tagging), and access the S3 state object and lockfile. Scope `iam:PassRole` to the EC2 runtime role and require `iam:PassedToService=ec2.amazonaws.com`. Do not attach `AdministratorAccess`.
+Its existing permission policy must allow Terraform to manage this staging environment, create/update the two dedicated GitHub roles and inline policies (`iam:CreateRole`, `iam:PutRolePolicy`, `iam:UpdateAssumeRolePolicy`, and role tagging), and access the S3 state object and lockfile. For Auto Scaling resources, the policy must include the read actions Terraform uses while waiting for capacity, including `autoscaling:DescribeAutoScalingGroups` and `autoscaling:DescribeScalingActivities`; the latter is required by the `aws_autoscaling_group` waiter even though the resource itself is being created. Scope `iam:PassRole` to the EC2 runtime role and require `iam:PassedToService=ec2.amazonaws.com`. Do not attach `AdministratorAccess`.
+
+The deployment role policy must contain this least-privilege statement (the
+resource is `*` because AWS does not support resource-level permissions for
+these Auto Scaling read actions):
+
+```json
+{
+  "Effect": "Allow",
+  "Action": [
+    "autoscaling:DescribeAutoScalingGroups",
+    "autoscaling:DescribeScalingActivities"
+  ],
+  "Resource": "*"
+}
+```
+
+If Terraform reports `not authorized to perform: autoscaling:Describe...`,
+update the identity policy attached to
+`cloudops-github-terraform-deploy` in IAM, then rerun **Terraform apply**.
+This is an AWS IAM prerequisite, not a GitHub Actions variable or OIDC
+configuration problem.
 
 The first successful Terraform apply creates two dedicated roles:
 
@@ -208,6 +229,14 @@ Use a private channel for security reports.
 Routine checks include ALB target health, 5xx/latency, Auto Scaling activity,
 CloudWatch application/bootstrap logs, RDS availability/backups, `/health`,
 `/ready`, and `/api/dashboard`.
+
+If an apply stops with `replace_because_tainted`, do not enable replacement
+blindly. For a resource created by an earlier interrupted apply, rerun
+**Terraform apply** with `recover_tainted_state=true`. The guarded recovery
+step only untaints known resources that are already present in state, including
+the Auto Scaling Group, and then the normal plan safety check runs again. If
+the replacement remains after recovery, stop and review the resource state
+instead of approving it.
 
 For an unhealthy target, inspect the target group, ALB security group,
 application port, `/health`, and container logs. For bootstrap or image

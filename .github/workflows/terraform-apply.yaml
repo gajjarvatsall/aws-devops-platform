@@ -65,6 +65,7 @@ jobs:
             aws_ssm_parameter.image_tag
             module.alb.aws_lb.this
             module.alb.aws_lb_target_group.app
+            module.autoscaling.aws_autoscaling_group.app
             module.rds.aws_db_instance.this
             module.rds.aws_secretsmanager_secret.db
             module.s3.aws_s3_bucket.alb_logs
