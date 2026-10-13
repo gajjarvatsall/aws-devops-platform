@@ -115,20 +115,21 @@ Actions workflow. It runs:
 6. Format and validate Terraform roots.
 7. Assume the staging deployment role through GitHub OIDC.
 8. Initialize staging remote state.
-9. Generate and display a base infrastructure plan.
-10. Wait for one protected `staging` environment approval, then apply the exact
-    uploaded base plan with zero EC2 capacity.
+9. Wait for one protected `staging` environment approval.
+10. Generate and display the base infrastructure plan, then apply it with zero
+    EC2 capacity.
 11. Read the real ECR repository URL from Terraform.
 12. Build or safely reuse an immutable image tag.
 13. Generate and apply the rollout plan in the same approved deployment job.
 
-Pull requests run validation only. A push to `main` runs validation, generates
-the base plan, and pauses once at the protected `staging` environment. After
-one approval, the workflow applies the base plan, builds or verifies the image,
-generates the rollout plan, and applies it. Manual runs are also supported by
-starting `workflow_dispatch` with `deploy=true`. The base plan is uploaded as
-a short-lived artifact and the rollout plan is displayed in the approved job;
-both can contain sensitive infrastructure values and must be access-controlled.
+Pull requests run validation only. A push to `main` runs validation and then
+pauses once at the protected `staging` environment. After one approval, the
+workflow generates and displays the base plan, applies it with zero capacity,
+builds or verifies the image, generates the rollout plan, and applies it.
+Manual runs are also supported by starting `workflow_dispatch` with
+`deploy=true`. The plan files are displayed in the approved deployment job and
+can contain sensitive infrastructure values, so workflow access must be
+controlled.
 
 Required **repository-level Actions variables** (not Environment variables and
 not secrets) are:
@@ -143,19 +144,16 @@ CERTIFICATE_ARN
 ```
 
 Create them under **Repository Settings → Secrets and variables → Actions →
-Variables**. They must be repository-level because the plan, image, and
-rollout-plan jobs intentionally do not use the protected Environment; adding
-`environment: staging` to those jobs would trigger approval before the plan is
-generated. If these values are created only under the `staging` Environment,
-`vars.AWS_REGION`, `vars.AWS_DEPLOY_ROLE_ARN`, and the other values are empty in
-the plan jobs and AWS authentication fails with `aws-region` missing.
+Variables**, or as variables on the protected `staging` Environment. The
+deployment job now declares `environment: staging`, so either scope is
+available when that job starts. Repository-level variables are simpler for
+non-secret configuration; keep the Environment for required reviewers and
+deployment-branch restrictions.
 
-Configure the separate `staging` Environment with required reviewers and
-restrict its deployment branches to `main`. The environment is used only by
-the single staging deployment job, so approval occurs after the base plan is
-generated. The AWS OIDC trust policy permits the `main` branch subject used by
-the planning job and the exact `staging` environment subject used by the
-approved deployment job.
+Configure the `staging` Environment with required reviewers and restrict its
+deployment branches to `main`. The single deployment job uses this Environment,
+so GitHub pauses once before any AWS deployment steps run. The AWS OIDC trust
+policy must allow the exact `staging` environment subject.
 
 The OIDC trust policy must restrict the repository and approved branch or
 environment. The deployment role must have a separately reviewed
@@ -192,9 +190,9 @@ terraform -chdir=bootstrap/backend apply -var-file=bootstrap.tfvars
 
 4. Configure the repository variables and protected GitHub `staging`
    environment.
-5. Push to `main`; validation and the base plan run automatically. Approve the
-   single staging deployment gate when the plan is ready. Alternatively,
-   manually start `Stage deploy` with `deploy=true`.
+5. Push to `main`; validation runs automatically and then the workflow pauses
+   for one staging approval. Alternatively, manually start `Stage deploy` with
+   `deploy=true`.
 6. Provide a same-region DNS-validated ACM certificate ARN for HTTPS.
 7. Verify the resulting ALB URL and `/health`, `/ready`, and
    `/api/dashboard`.
