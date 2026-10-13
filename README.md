@@ -131,24 +131,18 @@ Manual runs are also supported by starting `workflow_dispatch` with
 can contain sensitive infrastructure values, so workflow access must be
 controlled.
 
-Required **repository-level Actions variables** (not Environment variables and
-not secrets) are:
+Required external configuration:
 
 ```text
-AWS_REGION
-AWS_DEPLOY_ROLE_ARN
-TF_STATE_BUCKET
-TF_STATE_REGION
-TF_PROJECT_NAME
 CERTIFICATE_ARN
 ```
 
-Create them under **Repository Settings → Secrets and variables → Actions →
-Variables**, or as variables on the protected `staging` Environment. The
-deployment job now declares `environment: staging`, so either scope is
-available when that job starts. Repository-level variables are simpler for
-non-secret configuration; keep the Environment for required reviewers and
-deployment-branch restrictions.
+The workflow defines the fixed staging region, deployment role ARN, state
+bucket, state region, and project name directly. This avoids failing because
+non-secret values are missing from an Actions-variable scope. Create only
+`CERTIFICATE_ARN` under **Repository Settings → Secrets and variables →
+Actions → Variables**, or as a variable on the protected `staging` Environment.
+Keep the Environment for required reviewers and deployment-branch restrictions.
 
 Configure the `staging` Environment with required reviewers and restrict its
 deployment branches to `main`. The single deployment job uses this Environment,

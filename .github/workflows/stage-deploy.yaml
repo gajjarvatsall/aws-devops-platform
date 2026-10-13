@@ -27,6 +27,11 @@ concurrency:
 env:
   TERRAFORM_VERSION: "1.15.8"
   PYTHON_VERSION: "3.12"
+  AWS_REGION: "ap-south-1"
+  AWS_DEPLOY_ROLE_ARN: "arn:aws:iam::337909740274:role/cloudops-github-terraform-deploy"
+  TF_STATE_BUCKET: "aws-vg-cloudops-tf-state"
+  TF_STATE_REGION: "ap-south-1"
+  TF_PROJECT_NAME: "cloudops-demo"
 
 jobs:
   validate:
@@ -77,32 +82,21 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
       - name: Validate staging deployment configuration
         env:
-          AWS_REGION: ${{ vars.AWS_REGION }}
-          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-          TF_STATE_REGION: ${{ vars.TF_STATE_REGION }}
-          TF_PROJECT_NAME: ${{ vars.TF_PROJECT_NAME }}
+          CERTIFICATE_ARN: ${{ vars.CERTIFICATE_ARN }}
         run: |
           set -euo pipefail
-          test -n "$AWS_REGION" || { echo "::error::AWS_REGION is missing from repository or staging Environment variables"; exit 1; }
-          test -n "$AWS_DEPLOY_ROLE_ARN" || { echo "::error::AWS_DEPLOY_ROLE_ARN is missing from repository or staging Environment variables"; exit 1; }
-          test -n "$TF_STATE_BUCKET" || { echo "::error::TF_STATE_BUCKET is missing from repository or staging Environment variables"; exit 1; }
-          test -n "$TF_STATE_REGION" || { echo "::error::TF_STATE_REGION is missing from repository or staging Environment variables"; exit 1; }
-          test -n "$TF_PROJECT_NAME" || { echo "::error::TF_PROJECT_NAME is missing from repository or staging Environment variables"; exit 1; }
+          test -n "$CERTIFICATE_ARN" || { echo "::error::CERTIFICATE_ARN is missing from repository or staging Environment variables"; exit 1; }
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
           role-session-name: github-${{ github.run_id }}-base-plan
       - name: Create staging variables
         id: config
         working-directory: environments/staging
         env:
-          AWS_REGION: ${{ vars.AWS_REGION }}
-          PROJECT_NAME: ${{ vars.TF_PROJECT_NAME }}
+          PROJECT_NAME: ${{ env.TF_PROJECT_NAME }}
           CERTIFICATE_ARN: ${{ vars.CERTIFICATE_ARN }}
-          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-          TF_STATE_REGION: ${{ vars.TF_STATE_REGION }}
         run: |
           test -n "$AWS_REGION"
           test -n "$PROJECT_NAME"
@@ -117,8 +111,8 @@ jobs:
       - name: Initialize Terraform
         working-directory: environments/staging
         env:
-          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-          TF_STATE_REGION: ${{ vars.TF_STATE_REGION }}
+          TF_STATE_BUCKET: ${{ env.TF_STATE_BUCKET }}
+          TF_STATE_REGION: ${{ env.TF_STATE_REGION }}
         run: terraform init -input=false -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="region=$TF_STATE_REGION"
       - name: Generate base plan
         working-directory: environments/staging
@@ -136,7 +130,6 @@ jobs:
       - name: Build or verify immutable image
         id: image
         env:
-          AWS_REGION: ${{ vars.AWS_REGION }}
           ECR_REPOSITORY: ${{ steps.ecr.outputs.repository }}
           REQUESTED_TAG: ${{ inputs.image_tag }}
           EXPECTED_REVISION: ${{ github.sha }}
