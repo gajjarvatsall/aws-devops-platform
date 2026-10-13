@@ -24,7 +24,7 @@ jobs:
     name: Test application
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: actions/setup-python@v5
@@ -58,7 +58,7 @@ jobs:
       ASG_NAME: cloudops-demo-staging-app-asg
       ALB_NAME: cloudops-demo-staging-alb
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
